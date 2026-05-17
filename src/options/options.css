@@ -1,0 +1,63 @@
+:root {
+  color-scheme: light dark;
+}
+body {
+  font:
+    14px/1.5 -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+  margin: 0;
+}
+main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 32px 24px 64px;
+}
+h1 {
+  font-size: 22px;
+  margin: 0 0 24px;
+}
+h2 {
+  font-size: 16px;
+  margin: 32px 0 8px;
+}
+.muted {
+  color: #888;
+}
+section + section {
+  margin-top: 24px;
+}
+.host-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+.host-row:first-child {
+  border-top: none;
+}
+.host-name {
+  flex: 1;
+  font-weight: 500;
+}
+.host-row label {
+  font-size: 13px;
+  color: #555;
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+button {
+  font: inherit;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+}
+button.danger {
+  color: #c0392b;
+  border-color: #c0392b;
+}

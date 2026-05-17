@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Egg extension settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Egg extension</h1>
+      <section id="status"></section>
+      <section>
+        <h2>Per-site permissions</h2>
+        <p class="muted">
+          Each site you grant a permission for appears here.  Reading
+          signals (visit, time spent, scroll depth) and automatic
+          capture are off by default and only ever recorded for sites
+          you have explicitly opted in for.
+        </p>
+        <div id="hosts"></div>
+        <button id="add-host">Add a site</button>
+      </section>
+      <section>
+        <h2>Panic</h2>
+        <p class="muted">
+          Forget the pairing token and revoke every per-site
+          permission.  Egg's own data is not touched; this only resets
+          the extension.
+        </p>
+        <button id="panic" class="danger">Reset extension</button>
+      </section>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>
