@@ -6,6 +6,7 @@ import * as menus from "./menus.js";
 import * as feeds from "./feeds.js";
 import * as signals from "./signals.js";
 import * as notifications from "./notifications.js";
+import * as commands from "./commands.js";
 import { dispatch } from "./dispatch.js";
 
 menus.installMenus(async ({ kind, tab, selection, url }) => {
@@ -17,6 +18,7 @@ menus.installMenus(async ({ kind, tab, selection, url }) => {
 });
 
 notifications.installPolling();
+commands.installCommandPolling();
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   (async () => {
