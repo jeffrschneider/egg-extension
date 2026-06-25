@@ -2,6 +2,24 @@
 // content_scripts.js array have already attached helpers to window.
 
 (function () {
+  // Ctrl+M (or Cmd+M) — memorize this page. Capture it to the Gateway,
+  // where the Memorize egglet summarizes and saves it to the knowledge
+  // base. Mirrors Egg Browser's built-in Ctrl+M, but works in any browser
+  // the extension runs in.
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === "m" || e.key === "M")) {
+        e.preventDefault();
+        e.stopPropagation();
+        chrome.runtime
+          .sendMessage({ type: "capture", kind: "article" })
+          .catch(() => {});
+      }
+    },
+    true,
+  );
+
   // Feed autodiscovery: emit once after the page settles.
   try {
     const feeds = window.__eggFeeds.scan();
