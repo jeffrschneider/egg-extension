@@ -68,6 +68,31 @@ async function render() {
     el("p", { class: "muted" }, `Paired with localhost:${status.port}.`),
   );
 
+  // Front door to the Egglets: open the Gateway's launcher page in a tab.
+  // The page lists every installed Egglet with an Open button; each Egglet
+  // self-authorizes when loaded, so no token plumbing is needed here. We
+  // reuse the port the extension already paired with.
+  root.appendChild(
+    el(
+      "div",
+      { class: "section" },
+      el(
+        "button",
+        {
+          class: "primary",
+          style: "width:100%",
+          onclick: () => {
+            const url = `http://127.0.0.1:${status.port}/egglets`;
+            console.log("[Egg:Popup] opening Egglet launcher", url);
+            chrome.tabs.create({ url });
+            window.close();
+          },
+        },
+        "Open Egglets",
+      ),
+    ),
+  );
+
   const okEl = el("div", { class: "ok" });
   const errEl = el("div", { class: "err" });
 
