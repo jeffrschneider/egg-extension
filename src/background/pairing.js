@@ -1,4 +1,4 @@
-import { setConfig, clearConfig, gatewayGet } from "./gateway.js";
+import { setConfig, clearConfig, gatewayGet, browserInfo } from "./gateway.js";
 
 // Parses a pairing string of the form "PORT-CODE" where PORT is the
 // Gateway's HTTP port and CODE is the one-time code Egg displayed to
@@ -18,10 +18,13 @@ export async function pair(rawInput) {
   }
   const { port, code } = parsed;
   const url = `http://127.0.0.1:${port}/api/extension/pair`;
+  // Tell the Gateway which browser this is, so it shows a real name
+  // instead of a hand-typed label.
+  const browser = await browserInfo();
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ code, browser }),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
