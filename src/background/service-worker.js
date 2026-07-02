@@ -1,5 +1,5 @@
 import { MSG } from "../shared/messages.js";
-import { isPaired, getConfig } from "./gateway.js";
+import { isPaired, getConfig, setConfig } from "./gateway.js";
 import * as pairing from "./pairing.js";
 import * as perms from "./permissions.js";
 import * as menus from "./menus.js";
@@ -38,6 +38,23 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         case MSG.PAIR: {
           const result = await pairing.pair(msg.input);
           sendResponse({ ok: true, ...result });
+          return;
+        }
+        case MSG.CONNECT: {
+          // One-click pairing: the Gateway's /connect page provisioned a
+          // token and its content-script bridge forwarded it here. Store it
+          // exactly like a completed pair — no code round-trip.
+          if (!msg.token || !msg.port) {
+            sendResponse({ ok: false, error: "connect: missing token/port" });
+            return;
+          }
+          await setConfig({
+            port: Number(msg.port),
+            token: msg.token,
+            host: msg.host || "127.0.0.1",
+            pairedAt: Date.now(),
+          });
+          sendResponse({ ok: true });
           return;
         }
         case MSG.UNPAIR: {

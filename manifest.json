@@ -49,6 +49,11 @@
         "src/content/content-script.js"
       ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["http://127.0.0.1/connect*", "http://localhost/connect*"],
+      "js": ["src/content/connect-bridge.js"],
+      "run_at": "document_start"
     }
   ]
 }

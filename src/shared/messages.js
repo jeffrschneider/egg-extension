@@ -5,6 +5,7 @@
 export const MSG = {
   STATUS: "status",
   PAIR: "pair",
+  CONNECT: "connect",
   UNPAIR: "unpair",
   CAPTURE: "capture",
   GET_PERMISSIONS: "get_permissions",
