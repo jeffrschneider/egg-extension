@@ -121,7 +121,9 @@
       e.preventDefault();
       eggToast("Saving to Egg…", "#7c5cff");
       try {
-        chrome.runtime.sendMessage({ type: "capture", kind: "page" }, (resp) => {
+        // "article" = readable content only (no viewport screenshot, which can
+        // fail and isn't needed to memorize a page).
+        chrome.runtime.sendMessage({ type: "capture", kind: "article" }, (resp) => {
           if (chrome.runtime.lastError) {
             eggToast("Egg: reload this page and try again", "#ef4444");
             return;
