@@ -37,19 +37,21 @@ function flashBadge(text, color) {
 // One capture path for the context menu and the keyboard shortcut, with
 // visible feedback either way.
 async function runCapture({ kind, tab, selection, url }) {
-  if (!tab) return;
+  if (!tab) return { ok: false, reason: "no_tab" };
   if (!(await isPaired())) {
     flashBadge("!", "#ef4444");
     notify("Egg — not connected", "Open the Egg extension and click “Connect this browser”, then try again.");
-    return;
+    return { ok: false, reason: "not_connected" };
   }
   try {
     await dispatch({ kind, tab, selection, url, image: url });
     flashBadge("✓", "#2fa84f");
     notify("Saved to Egg", (tab.title || "This page") + " — open Memorize to keep it.");
+    return { ok: true };
   } catch (e) {
     flashBadge("!", "#ef4444");
     notify("Egg — couldn’t save", e?.message || "The Egg Gateway wasn’t reachable.");
+    return { ok: false, reason: "error", message: e?.message || String(e) };
   }
 }
 
@@ -107,10 +109,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           return;
         }
         case MSG.CAPTURE: {
-          // Route through runCapture so Ctrl+M / popup captures get the same
-          // notification + badge feedback.
-          await runCapture({ kind: msg.kind || "page", tab: await getActiveTab() });
-          sendResponse({ ok: true });
+          // Route through runCapture and return the result so the caller (the
+          // content script's Ctrl+M handler) can show on-page feedback.
+          const result = await runCapture({ kind: msg.kind || "page", tab: await getActiveTab() });
+          sendResponse(result || { ok: true });
           return;
         }
         case MSG.GET_PERMISSIONS: {

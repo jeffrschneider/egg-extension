@@ -84,10 +84,33 @@
     return true;
   });
 
-  // Ctrl+M memorizes the current page (parity with the Egg Browser). We use a
-  // page keydown listener rather than a chrome.commands shortcut because Chrome
-  // doesn't reliably auto-assign an extension shortcut — this works with no
-  // setup. Skipped while typing so we don't hijack the key in a field.
+  // On-page feedback toast — the notification/badge live on the toolbar icon,
+  // which is easy to miss (unpinned icon, notifications off). This shows right
+  // on the page, like the Egg Browser's frame pulse.
+  function eggToast(text, color) {
+    let el = document.getElementById("__egg_toast");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "__egg_toast";
+      el.style.cssText = [
+        "position:fixed", "top:16px", "right:16px", "z-index:2147483647",
+        "background:#15151c", "color:#fff", "padding:10px 14px", "border-radius:10px",
+        "font:600 13px/1.3 system-ui,-apple-system,sans-serif",
+        "box-shadow:0 8px 30px rgba(0,0,0,.45)", "border:1px solid #2a2a34",
+        "transition:opacity .2s", "pointer-events:none", "max-width:320px",
+      ].join(";");
+      (document.body || document.documentElement).appendChild(el);
+    }
+    el.textContent = text;
+    el.style.borderLeft = "3px solid " + (color || "#7c5cff");
+    el.style.opacity = "1";
+    clearTimeout(el.__t);
+    el.__t = setTimeout(() => { el.style.opacity = "0"; }, 2800);
+  }
+
+  // Ctrl+M memorizes the current page (parity with the Egg Browser). Handled
+  // in the page rather than via a chrome.commands shortcut because Chrome
+  // doesn't reliably auto-assign one. Skipped while typing in a field.
   window.addEventListener(
     "keydown",
     (e) => {
@@ -96,10 +119,19 @@
       const t = e.target;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
       e.preventDefault();
+      eggToast("Saving to Egg…", "#7c5cff");
       try {
-        chrome.runtime.sendMessage({ type: "capture", kind: "page" });
+        chrome.runtime.sendMessage({ type: "capture", kind: "page" }, (resp) => {
+          if (chrome.runtime.lastError) {
+            eggToast("Egg: reload this page and try again", "#ef4444");
+            return;
+          }
+          if (resp && resp.ok) eggToast("Saved to Egg ✓ — open Memorize to keep it", "#2fa84f");
+          else if (resp && resp.reason === "not_connected") eggToast("Connect this browser in the Egg extension", "#ef4444");
+          else eggToast("Egg: couldn't save this page", "#ef4444");
+        });
       } catch (err) {
-        /* extension context gone (e.g. reloaded) */
+        eggToast("Egg: extension unavailable", "#ef4444");
       }
     },
     true,
