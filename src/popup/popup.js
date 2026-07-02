@@ -4,6 +4,30 @@ function send(type, extras = {}) {
   return chrome.runtime.sendMessage({ type, ...extras });
 }
 
+// Find the local Egg Gateway by knocking on its fixed port window (4747..)
+// — the same window the daemon binds and the SDK probes. Returns the port of
+// the first one that identifies itself as Egg, or null.
+async function discoverGateway() {
+  const BASE = 4747;
+  const COUNT = 10;
+  for (let i = 0; i < COUNT; i++) {
+    const port = BASE + i;
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 400);
+      const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: ctrl.signal });
+      clearTimeout(timer);
+      if (res.ok) {
+        const body = await res.json().catch(() => ({}));
+        if (body && body.service === "egg-gateway") return port;
+      }
+    } catch (e) {
+      // refused / timed out / not JSON — not the Gateway on this port
+    }
+  }
+  return null;
+}
+
 function el(tag, attrs = {}, ...children) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -31,11 +55,13 @@ async function render() {
       el(
         "p",
         { class: "muted" },
-        "Open Egg, find the pairing code under Settings → Extension, and paste it here.",
+        "Connect this browser to your Egg Gateway to capture pages and run Egg apps.",
       ),
     );
-    const input = el("input", { type: "text", placeholder: "54321-ABC123" });
     const errEl = el("div", { class: "err" });
+
+    // Manual code fallback — hidden unless auto-connect can't find the Gateway.
+    const input = el("input", { type: "text", placeholder: "54321-ABC123" });
     const pairBtn = el(
       "button",
       {
@@ -45,11 +71,8 @@ async function render() {
           pairBtn.disabled = true;
           try {
             const r = await send(MSG.PAIR, { input: input.value });
-            if (r?.ok) {
-              render();
-            } else {
-              errEl.textContent = r?.error || "Pairing failed.";
-            }
+            if (r?.ok) render();
+            else errEl.textContent = r?.error || "Pairing failed.";
           } catch (e) {
             errEl.textContent = e?.message || "Pairing failed.";
           } finally {
@@ -59,7 +82,36 @@ async function render() {
       },
       "Pair",
     );
-    root.appendChild(el("div", { class: "row" }, input, pairBtn));
+    const codeRow = el("div", { class: "row", style: "display:none;margin-top:8px" }, input, pairBtn);
+
+    const connectBtn = el(
+      "button",
+      {
+        class: "primary",
+        style: "width:100%",
+        onclick: async () => {
+          errEl.textContent = "";
+          connectBtn.disabled = true;
+          connectBtn.textContent = "Finding Egg…";
+          const port = await discoverGateway();
+          if (port) {
+            // Open the Gateway's one-click connect page; its content-script
+            // bridge stores the token this browser gets. No code to copy.
+            chrome.tabs.create({ url: `http://127.0.0.1:${port}/connect` });
+            window.close();
+            return;
+          }
+          connectBtn.disabled = false;
+          connectBtn.textContent = "Connect this browser";
+          errEl.textContent = "Couldn't find a running Egg Gateway. Is Egg open? You can enter a code instead.";
+          codeRow.style.display = "flex";
+        },
+      },
+      "Connect this browser",
+    );
+
+    root.appendChild(connectBtn);
+    root.appendChild(codeRow);
     root.appendChild(errEl);
     return;
   }
