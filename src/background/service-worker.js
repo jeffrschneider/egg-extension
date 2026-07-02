@@ -9,12 +9,56 @@ import * as notifications from "./notifications.js";
 import * as commands from "./commands.js";
 import { dispatch } from "./dispatch.js";
 
-menus.installMenus(async ({ kind, tab, selection, url }) => {
+// Chrome has no native capture feedback like the Egg Browser's frame pulse,
+// so confirm every capture with a notification and a brief toolbar badge.
+function notify(title, message) {
+  try {
+    chrome.notifications.create("egg-cap-" + Date.now(), {
+      type: "basic",
+      iconUrl: chrome.runtime.getURL("icons/icon.png"),
+      title,
+      message,
+    });
+  } catch (e) {
+    /* notifications may be disabled */
+  }
+}
+
+function flashBadge(text, color) {
+  try {
+    chrome.action.setBadgeBackgroundColor({ color: color || "#7c5cff" });
+    chrome.action.setBadgeText({ text });
+    setTimeout(() => chrome.action.setBadgeText({ text: "" }), 2500);
+  } catch (e) {
+    /* ignore */
+  }
+}
+
+// One capture path for the context menu and the keyboard shortcut, with
+// visible feedback either way.
+async function runCapture({ kind, tab, selection, url }) {
+  if (!tab) return;
+  if (!(await isPaired())) {
+    flashBadge("!", "#ef4444");
+    notify("Egg — not connected", "Open the Egg extension and click “Connect this browser”, then try again.");
+    return;
+  }
   try {
     await dispatch({ kind, tab, selection, url, image: url });
+    flashBadge("✓", "#2fa84f");
+    notify("Saved to Egg", (tab.title || "This page") + " — open Memorize to keep it.");
   } catch (e) {
-    console.warn("[egg-ext] capture failed:", e?.message || e);
+    flashBadge("!", "#ef4444");
+    notify("Egg — couldn’t save", e?.message || "The Egg Gateway wasn’t reachable.");
   }
+}
+
+menus.installMenus((args) => runCapture(args));
+
+// Ctrl+M (rebindable at chrome://extensions/shortcuts) memorizes the page.
+chrome.commands.onCommand.addListener(async (command) => {
+  if (command !== "memorize-page") return;
+  await runCapture({ kind: "page", tab: await getActiveTab() });
 });
 
 notifications.installPolling();
@@ -63,12 +107,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           return;
         }
         case MSG.CAPTURE: {
-          const tab = await getActiveTab();
-          if (!tab) {
-            sendResponse({ ok: false, error: "No active tab." });
-            return;
-          }
-          await dispatch({ kind: msg.kind, tab });
+          // Route through runCapture so Ctrl+M / popup captures get the same
+          // notification + badge feedback.
+          await runCapture({ kind: msg.kind || "page", tab: await getActiveTab() });
           sendResponse({ ok: true });
           return;
         }

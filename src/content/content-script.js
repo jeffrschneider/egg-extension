@@ -83,4 +83,25 @@
     }
     return true;
   });
+
+  // Ctrl+M memorizes the current page (parity with the Egg Browser). We use a
+  // page keydown listener rather than a chrome.commands shortcut because Chrome
+  // doesn't reliably auto-assign an extension shortcut — this works with no
+  // setup. Skipped while typing so we don't hijack the key in a field.
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+      if (e.key !== "m" && e.key !== "M") return;
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      e.preventDefault();
+      try {
+        chrome.runtime.sendMessage({ type: "capture", kind: "page" });
+      } catch (err) {
+        /* extension context gone (e.g. reloaded) */
+      }
+    },
+    true,
+  );
 })();

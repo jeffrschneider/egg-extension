@@ -21,6 +21,12 @@
     "service_worker": "src/background/service-worker.js",
     "type": "module"
   },
+  "commands": {
+    "memorize-page": {
+      "suggested_key": { "default": "Ctrl+M" },
+      "description": "Send the current page to Egg"
+    }
+  },
   "action": {
     "default_popup": "src/popup/popup.html",
     "default_icon": {
