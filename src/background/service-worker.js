@@ -1,5 +1,5 @@
 import { MSG } from "../shared/messages.js";
-import { isPaired, getConfig, setConfig } from "./gateway.js";
+import { isPaired, getConfig, setConfig, gatewayPost } from "./gateway.js";
 import * as pairing from "./pairing.js";
 import * as perms from "./permissions.js";
 import * as menus from "./menus.js";
@@ -47,6 +47,14 @@ async function runCapture({ kind, tab, selection, url }) {
     await dispatch({ kind, tab, selection, url, image: url });
     flashBadge("✓", "#2fa84f");
     notify("Saved to Egg", (tab.title || "This page") + " — open Memorize to keep it.");
+    // Experiment: send the viewport screenshot so the daemon can fly it to the
+    // tray. Best-effort — captureVisibleTab fails on chrome:// and a few others.
+    try {
+      const shot = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+      if (shot) gatewayPost("/api/extension/flourish", { image: shot }).catch(() => {});
+    } catch (e) {
+      /* no screenshot on this page — skip the flourish */
+    }
     return { ok: true };
   } catch (e) {
     flashBadge("!", "#ef4444");
