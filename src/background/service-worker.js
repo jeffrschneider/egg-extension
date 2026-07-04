@@ -570,6 +570,20 @@ const EGG_APPS = [
   { id: "game-coach", label: "Game Coach", icon: "gamepad-2" },
 ];
 
+// Convert the current page to a clean, beautiful reader view in place. All
+// local — reuses the shared readArticle extraction (window.__eggReadable) and
+// renders a styled overlay; no Gateway needed.
+async function openEasyReading(tab) {
+  if (!tab) return { ok: false };
+  try {
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: pageEasyReading });
+    return { ok: true };
+  } catch (e) {
+    flashBadge("!", "#ef4444");
+    return { ok: false, message: e?.message || String(e) };
+  }
+}
+
 // Open an Egg app (egglet) in a new tab, or the Gateway home when id is empty.
 async function openApp(appId) {
   const cfg = await getConfig();
@@ -590,6 +604,7 @@ async function openEggMenu(tab) {
   const items = [];
   if (sp) items.push({ action: "people", label: "Add " + (sp.name || "this person") + " to People", hint: "profile" });
   items.push({ action: "memorize", label: "Memorize this page", hint: sp ? "" : "Enter" });
+  items.push({ action: "easy_reading", label: "Convert to Easy Reading", hint: "" });
   if (/youtube\.com\/watch|youtu\.be\//.test(tab.url || "")) {
     items.push({ action: "video_transcript", label: "Get video transcript", hint: "" });
   }
@@ -728,6 +743,87 @@ function pageEggMenu(items, title, apps) {
   back.addEventListener("click", (e) => { if (e.target === back) cleanup(); });
 }
 
+// Runs IN THE PAGE (injected). Extracts the readable article via the shared
+// __eggReadable.extract() (Mozilla Readability — the same pass the Egg Browser's
+// Reader uses) and renders it as a clean, beautiful reader overlay. Toggles off
+// if already open. All local; nothing leaves the page.
+function pageEasyReading() {
+  const existing = document.getElementById("__egg_reader");
+  if (existing) { existing.remove(); return; }
+
+  const rd = window.__eggReadable;
+  const r = rd && rd.extract ? rd.extract() : null;
+  const toast = (text) => {
+    const t = document.createElement("div");
+    t.textContent = text;
+    t.style.cssText = "position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:2147483647;background:#15151c;color:#fff;border:1px solid #2a2a34;border-radius:10px;padding:12px 18px;font:600 13px system-ui,-apple-system,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.5)";
+    document.documentElement.appendChild(t);
+    setTimeout(() => t.remove(), 3000);
+  };
+  if (!r || !r.html || r.kind === "fallback") {
+    toast("Egg: no readable article found on this page.");
+    return;
+  }
+
+  const back = document.createElement("div");
+  back.id = "__egg_reader";
+  back.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:#faf9f6;overflow-y:auto;color:#1a1a1a;-webkit-font-smoothing:antialiased";
+
+  const bar = document.createElement("div");
+  bar.style.cssText = "position:sticky;top:0;display:flex;justify-content:flex-end;padding:12px 16px";
+  const close = document.createElement("button");
+  close.textContent = "Close ✕";
+  close.style.cssText = "background:#15151c;color:#fff;border:0;border-radius:20px;padding:8px 16px;font:600 13px system-ui,-apple-system,sans-serif;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.2)";
+  const cleanup = () => { back.remove(); document.removeEventListener("keydown", onKey, true); };
+  close.onclick = cleanup;
+  bar.appendChild(close);
+  back.appendChild(bar);
+
+  const art = document.createElement("article");
+  art.style.cssText = "max-width:680px;margin:0 auto;padding:4px 28px 160px;font:400 20px/1.75 Georgia,Cambria,'Times New Roman',serif";
+  if (r.title) {
+    const h = document.createElement("h1");
+    h.textContent = r.title;
+    h.style.cssText = "font:700 36px/1.2 -apple-system,system-ui,sans-serif;margin:20px 0 10px;color:#111";
+    art.appendChild(h);
+  }
+  if (r.byline) {
+    const b = document.createElement("div");
+    b.textContent = r.byline;
+    b.style.cssText = "color:#777;font:400 15px/1.4 system-ui,-apple-system,sans-serif;margin:0 0 40px";
+    art.appendChild(b);
+  }
+
+  // Parse the cleaned article HTML with DOMParser (not innerHTML) so strict
+  // Trusted-Types pages don't block it, then import the nodes.
+  const parsed = new DOMParser().parseFromString(r.html, "text/html");
+  const content = document.createElement("div");
+  content.className = "egg-reader-body";
+  Array.prototype.slice.call(parsed.body.childNodes).forEach((n) => content.appendChild(document.importNode(n, true)));
+  art.appendChild(content);
+  back.appendChild(art);
+
+  const style = document.createElement("style");
+  style.textContent =
+    "#__egg_reader .egg-reader-body p{margin:0 0 22px}" +
+    "#__egg_reader .egg-reader-body img{max-width:100%;height:auto;border-radius:10px;margin:28px 0;display:block}" +
+    "#__egg_reader .egg-reader-body h2{font:700 27px/1.3 -apple-system,system-ui,sans-serif;margin:44px 0 12px;color:#111}" +
+    "#__egg_reader .egg-reader-body h3{font:700 22px/1.35 -apple-system,system-ui,sans-serif;margin:34px 0 10px;color:#111}" +
+    "#__egg_reader .egg-reader-body a{color:#7c5cff;text-decoration:underline}" +
+    "#__egg_reader .egg-reader-body blockquote{margin:26px 0;padding:2px 0 2px 20px;border-left:3px solid #d9d5cc;color:#555;font-style:italic}" +
+    "#__egg_reader .egg-reader-body ul,#__egg_reader .egg-reader-body ol{margin:0 0 22px;padding-left:26px}" +
+    "#__egg_reader .egg-reader-body li{margin:0 0 8px}" +
+    "#__egg_reader .egg-reader-body figure{margin:28px 0}" +
+    "#__egg_reader .egg-reader-body figcaption{color:#888;font:400 14px/1.4 system-ui,-apple-system,sans-serif;margin-top:8px;text-align:center}" +
+    "#__egg_reader .egg-reader-body pre{background:#f0eee8;padding:14px 16px;border-radius:10px;overflow:auto;font:400 15px/1.5 ui-monospace,monospace}" +
+    "#__egg_reader .egg-reader-body code{font:400 15px ui-monospace,monospace}";
+  back.appendChild(style);
+  document.documentElement.appendChild(back);
+
+  function onKey(e) { if (e.key === "Escape") { e.preventDefault(); cleanup(); } }
+  document.addEventListener("keydown", onKey, true);
+}
+
 notifications.installPolling();
 commands.installCommandPolling();
 
@@ -780,6 +876,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           if (msg.action === "memorize") sendResponse(await runCapture({ kind: "article", tab }));
           else if (msg.action === "screenshot") sendResponse(await startCrop(tab));
           else if (msg.action === "coach_game") sendResponse(await startCrop(tab, "game-coach"));
+          else if (msg.action === "easy_reading") sendResponse(await openEasyReading(tab));
           else if (msg.action === "video_transcript") { handleVideoAction("transcript", tab?.url, tab); sendResponse({ ok: true }); }
           else if (msg.action === "open_app") sendResponse(await openApp(msg.payload));
           else if (msg.action === "browse_apps") sendResponse(await openApp(""));
