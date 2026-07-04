@@ -10,11 +10,14 @@
     "notifications",
     "scripting",
     "storage",
-    "alarms"
+    "alarms",
+    "cookies"
   ],
   "host_permissions": [
     "http://127.0.0.1:*/*",
-    "http://localhost:*/*"
+    "http://localhost:*/*",
+    "https://*.youtube.com/*",
+    "https://*.google.com/*"
   ],
   "optional_host_permissions": ["<all_urls>"],
   "background": {
@@ -60,6 +63,11 @@
       "matches": ["http://127.0.0.1/connect*", "http://localhost/connect*"],
       "js": ["src/content/connect-bridge.js"],
       "run_at": "document_start"
+    },
+    {
+      "matches": ["*://*.youtube.com/*"],
+      "js": ["src/content/video-button.js"],
+      "run_at": "document_idle"
     }
   ]
 }

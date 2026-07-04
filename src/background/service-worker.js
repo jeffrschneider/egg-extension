@@ -331,6 +331,59 @@ async function ponderSelection(selection, tab) {
   }
 }
 
+// ── YouTube / page video ──────────────────────────────────────────────
+// Export the tab's cookies for these domains as Netscape cookie text so the
+// Egg Gateway's yt-dlp can reach age-gated / logged-in videos. The Egg
+// Gateway can't read the user's Chrome cookies itself, so the Egg Extension
+// hands them over.
+async function exportCookiesNetscape(domains) {
+  const lines = ["# Netscape HTTP Cookie File"];
+  for (const domain of domains) {
+    let cookies = [];
+    try { cookies = await chrome.cookies.getAll({ domain }); } catch (e) { continue; }
+    for (const c of cookies) {
+      const incSub = c.domain.startsWith(".") ? "TRUE" : "FALSE";
+      const secure = c.secure ? "TRUE" : "FALSE";
+      const expiry = c.expirationDate ? Math.floor(c.expirationDate) : 0;
+      lines.push([c.domain, incSub, c.path || "/", secure, expiry, c.name, c.value].join("\t"));
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
+// Download and/or transcribe the video at `url` via the Egg Gateway (yt-dlp +
+// captions). Results are pushed back to the page as a toast.
+async function handleVideoAction(action, url, tab) {
+  const tabId = tab?.id;
+  const say = (text) => { if (tabId != null) chrome.tabs.sendMessage(tabId, { type: "video_result", text }).catch(() => {}); };
+  if (!url) return { ok: false };
+  if (!(await isPaired())) {
+    flashBadge("!", "#ef4444");
+    say("Egg isn't connected — open the extension and click Connect.");
+    return { ok: false, reason: "not_connected" };
+  }
+  let cookies = "";
+  try { cookies = await exportCookiesNetscape(["youtube.com", "google.com"]); } catch (e) { /* public-only */ }
+  try {
+    if (action === "download" || action === "both") {
+      const r = await gatewayPost("/api/extension/video/download", { url, cookies_text: cookies });
+      say(r?.ok ? "Video saved to your Downloads folder." : ("Download failed: " + (r?.message || "unknown")));
+    }
+    if (action === "transcript" || action === "both") {
+      const r = await gatewayPost("/api/extension/video/transcript", { url, cookies_text: cookies });
+      if (r?.source === "captions") say("Transcript saved to Memorize" + (r?.title ? ": " + r.title : "") + ".");
+      else if (r?.source === "error") say("Couldn't fetch the transcript — YouTube may be rate-limiting. Try again in a moment.");
+      else say("This video has no transcript.");
+    }
+    flashBadge("✓", "#2fa84f");
+    return { ok: true };
+  } catch (e) {
+    flashBadge("!", "#ef4444");
+    say("Egg error: " + (e?.message || String(e)));
+    return { ok: false, message: e?.message || String(e) };
+  }
+}
+
 // Resolve when tab `tabId` finishes loading, or after `timeoutMs`.
 function waitForTabComplete(tabId, timeoutMs) {
   return new Promise((resolve) => {
@@ -506,6 +559,9 @@ async function openEggMenu(tab) {
   const items = [];
   if (sp) items.push({ action: "people", label: "Add " + (sp.name || "this person") + " to People", hint: "profile" });
   items.push({ action: "memorize", label: "Memorize this page", hint: sp ? "" : "Enter" });
+  if (/youtube\.com\/watch|youtu\.be\//.test(tab.url || "")) {
+    items.push({ action: "video_transcript", label: "Get video transcript", hint: "" });
+  }
   items.push({ action: "screenshot", label: "Screenshot & crop", hint: "" });
   items.push({ action: "coach_game", label: "Coach a game", hint: "" });
   try {
@@ -650,11 +706,32 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           if (msg.action === "memorize") sendResponse(await runCapture({ kind: "article", tab }));
           else if (msg.action === "screenshot") sendResponse(await startCrop(tab));
           else if (msg.action === "coach_game") sendResponse(await startCrop(tab, "game-coach"));
+          else if (msg.action === "video_transcript") { handleVideoAction("transcript", tab?.url, tab); sendResponse({ ok: true }); }
           else if (msg.action === "people") sendResponse(await addToPeople(tab));
           else if (msg.action === "img_ponder") sendResponse(await sendImage(msg.payload, "ponder", tab));
           else if (msg.action === "img_studio") sendResponse(await sendImage(msg.payload, "studio", tab));
           else if (msg.action === "img_memorize") sendResponse(await sendImage(msg.payload, "memorize", tab));
           else sendResponse({ ok: false, reason: "unknown_action" });
+          return;
+        }
+        case "video_action": {
+          // Floating YouTube button asked to download/transcribe the video.
+          const tab = _sender?.tab || (await getActiveTab());
+          handleVideoAction(msg.action, msg.url, tab);
+          sendResponse({ ok: true });
+          return;
+        }
+        case "video_probe": {
+          // Menu is checking whether a transcript exists for this video.
+          if (!(await isPaired())) { sendResponse({ ok: false }); return; }
+          let cookies = "";
+          try { cookies = await exportCookiesNetscape(["youtube.com", "google.com"]); } catch (e) { /* public */ }
+          try {
+            const r = await gatewayPost("/api/extension/video/probe", { url: msg.url, cookies_text: cookies });
+            sendResponse(r || { ok: false });
+          } catch (e) {
+            sendResponse({ ok: false });
+          }
           return;
         }
         case "start_screenshot": {
