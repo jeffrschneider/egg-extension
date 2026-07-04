@@ -557,11 +557,13 @@ const APP_ICONS = {
   users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><path d="M16 3.128a4 4 0 0 1 0 7.744"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><circle cx="9" cy="7" r="4"/>',
   rss: '<path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/>',
   "gamepad-2": '<line x1="6" x2="10" y1="11" y2="11"/><line x1="8" x2="8" y1="9" y2="13"/><line x1="15" x2="15.01" y1="12" y2="12"/><line x1="18" x2="18.01" y1="10" y2="10"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/>',
+  "book-open": '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
 };
 
 // First-party Egg apps shown in the Ctrl+M menu's "Apps" dock. Each opens its
 // served egglet at the Gateway; "Browse all apps" opens the Gateway home.
 const EGG_APPS = [
+  { id: "reader", label: "Reader", icon: "book-open" },
   { id: "memorize", label: "Memorize", icon: "brain" },
   { id: "ponder", label: "Ponder", icon: "compass" },
   { id: "studio", label: "Studio", icon: "sparkles" },
@@ -570,16 +572,51 @@ const EGG_APPS = [
   { id: "game-coach", label: "Game Coach", icon: "gamepad-2" },
 ];
 
-// Convert the current page to a clean, beautiful reader view in place. All
-// local — reuses the shared readArticle extraction (window.__eggReadable) and
-// renders a styled overlay; no Gateway needed.
+// Convert the current page to Easy Reading: extract the article (shared
+// readArticle), hand it to the Reader egglet via a capture, and open it. The
+// Reader egglet reuses the Egg Browser's full flow/render pipeline (Reader +
+// the Pretext Magazine layout).
 async function openEasyReading(tab) {
   if (!tab) return { ok: false };
+  if (!(await isPaired())) {
+    flashBadge("!", "#ef4444");
+    notify("Egg — not connected", "Open the Egg extension and click “Connect this browser”.");
+    return { ok: false, reason: "not_connected" };
+  }
+  let article = null;
   try {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: pageEasyReading });
-    return { ok: true };
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => (window.__eggReadable && window.__eggReadable.extract ? window.__eggReadable.extract() : null),
+    });
+    article = result;
+  } catch (e) {
+    /* restricted page / no content script */
+  }
+  if (!article || !article.html || article.kind === "fallback") {
+    flashBadge("!", "#ef4444");
+    notify("Egg — no article", "This page doesn't have a readable article to convert.");
+    return { ok: false, reason: "no_article" };
+  }
+  try {
+    const resp = await gatewayPost("/api/extension/capture", {
+      kind: "article",
+      destination: "reader",
+      captured_at: new Date().toISOString(),
+      page: { url: tab.url, title: tab.title || article.title },
+      article: { html: article.html, text: article.text, title: article.title },
+    });
+    flashBadge("✓", "#2fa84f");
+    if (resp?.id) {
+      const cfg = await getConfig();
+      if (cfg?.port) {
+        chrome.tabs.create({ url: `http://127.0.0.1:${cfg.port}/e/reader/?capture=${resp.id}` });
+      }
+    }
+    return { ok: true, id: resp?.id };
   } catch (e) {
     flashBadge("!", "#ef4444");
+    notify("Egg — couldn't open Reader", e?.message || String(e));
     return { ok: false, message: e?.message || String(e) };
   }
 }
@@ -741,87 +778,6 @@ function pageEggMenu(items, title, apps) {
   }
   document.addEventListener("keydown", onKey, true);
   back.addEventListener("click", (e) => { if (e.target === back) cleanup(); });
-}
-
-// Runs IN THE PAGE (injected). Extracts the readable article via the shared
-// __eggReadable.extract() (Mozilla Readability — the same pass the Egg Browser's
-// Reader uses) and renders it as a clean, beautiful reader overlay. Toggles off
-// if already open. All local; nothing leaves the page.
-function pageEasyReading() {
-  const existing = document.getElementById("__egg_reader");
-  if (existing) { existing.remove(); return; }
-
-  const rd = window.__eggReadable;
-  const r = rd && rd.extract ? rd.extract() : null;
-  const toast = (text) => {
-    const t = document.createElement("div");
-    t.textContent = text;
-    t.style.cssText = "position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:2147483647;background:#15151c;color:#fff;border:1px solid #2a2a34;border-radius:10px;padding:12px 18px;font:600 13px system-ui,-apple-system,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.5)";
-    document.documentElement.appendChild(t);
-    setTimeout(() => t.remove(), 3000);
-  };
-  if (!r || !r.html || r.kind === "fallback") {
-    toast("Egg: no readable article found on this page.");
-    return;
-  }
-
-  const back = document.createElement("div");
-  back.id = "__egg_reader";
-  back.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:#faf9f6;overflow-y:auto;color:#1a1a1a;-webkit-font-smoothing:antialiased";
-
-  const bar = document.createElement("div");
-  bar.style.cssText = "position:sticky;top:0;display:flex;justify-content:flex-end;padding:12px 16px";
-  const close = document.createElement("button");
-  close.textContent = "Close ✕";
-  close.style.cssText = "background:#15151c;color:#fff;border:0;border-radius:20px;padding:8px 16px;font:600 13px system-ui,-apple-system,sans-serif;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.2)";
-  const cleanup = () => { back.remove(); document.removeEventListener("keydown", onKey, true); };
-  close.onclick = cleanup;
-  bar.appendChild(close);
-  back.appendChild(bar);
-
-  const art = document.createElement("article");
-  art.style.cssText = "max-width:680px;margin:0 auto;padding:4px 28px 160px;font:400 20px/1.75 Georgia,Cambria,'Times New Roman',serif";
-  if (r.title) {
-    const h = document.createElement("h1");
-    h.textContent = r.title;
-    h.style.cssText = "font:700 36px/1.2 -apple-system,system-ui,sans-serif;margin:20px 0 10px;color:#111";
-    art.appendChild(h);
-  }
-  if (r.byline) {
-    const b = document.createElement("div");
-    b.textContent = r.byline;
-    b.style.cssText = "color:#777;font:400 15px/1.4 system-ui,-apple-system,sans-serif;margin:0 0 40px";
-    art.appendChild(b);
-  }
-
-  // Parse the cleaned article HTML with DOMParser (not innerHTML) so strict
-  // Trusted-Types pages don't block it, then import the nodes.
-  const parsed = new DOMParser().parseFromString(r.html, "text/html");
-  const content = document.createElement("div");
-  content.className = "egg-reader-body";
-  Array.prototype.slice.call(parsed.body.childNodes).forEach((n) => content.appendChild(document.importNode(n, true)));
-  art.appendChild(content);
-  back.appendChild(art);
-
-  const style = document.createElement("style");
-  style.textContent =
-    "#__egg_reader .egg-reader-body p{margin:0 0 22px}" +
-    "#__egg_reader .egg-reader-body img{max-width:100%;height:auto;border-radius:10px;margin:28px 0;display:block}" +
-    "#__egg_reader .egg-reader-body h2{font:700 27px/1.3 -apple-system,system-ui,sans-serif;margin:44px 0 12px;color:#111}" +
-    "#__egg_reader .egg-reader-body h3{font:700 22px/1.35 -apple-system,system-ui,sans-serif;margin:34px 0 10px;color:#111}" +
-    "#__egg_reader .egg-reader-body a{color:#7c5cff;text-decoration:underline}" +
-    "#__egg_reader .egg-reader-body blockquote{margin:26px 0;padding:2px 0 2px 20px;border-left:3px solid #d9d5cc;color:#555;font-style:italic}" +
-    "#__egg_reader .egg-reader-body ul,#__egg_reader .egg-reader-body ol{margin:0 0 22px;padding-left:26px}" +
-    "#__egg_reader .egg-reader-body li{margin:0 0 8px}" +
-    "#__egg_reader .egg-reader-body figure{margin:28px 0}" +
-    "#__egg_reader .egg-reader-body figcaption{color:#888;font:400 14px/1.4 system-ui,-apple-system,sans-serif;margin-top:8px;text-align:center}" +
-    "#__egg_reader .egg-reader-body pre{background:#f0eee8;padding:14px 16px;border-radius:10px;overflow:auto;font:400 15px/1.5 ui-monospace,monospace}" +
-    "#__egg_reader .egg-reader-body code{font:400 15px ui-monospace,monospace}";
-  back.appendChild(style);
-  document.documentElement.appendChild(back);
-
-  function onKey(e) { if (e.key === "Escape") { e.preventDefault(); cleanup(); } }
-  document.addEventListener("keydown", onKey, true);
 }
 
 notifications.installPolling();
