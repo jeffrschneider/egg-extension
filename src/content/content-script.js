@@ -2,23 +2,10 @@
 // content_scripts.js array have already attached helpers to window.
 
 (function () {
-  // Ctrl+M (or Cmd+M) — memorize this page. Capture it to the Gateway,
-  // where the Memorize egglet summarizes and saves it to the knowledge
-  // base. Mirrors Egg Browser's built-in Ctrl+M, but works in any browser
-  // the extension runs in.
-  document.addEventListener(
-    "keydown",
-    (e) => {
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === "m" || e.key === "M")) {
-        e.preventDefault();
-        e.stopPropagation();
-        chrome.runtime
-          .sendMessage({ type: "capture", kind: "article" })
-          .catch(() => {});
-      }
-    },
-    true,
-  );
+  // Ctrl+M now opens the Egg menu (a command palette injected by the
+  // background on the keyboard command, which grants the activeTab that
+  // screenshot capture needs). Memorize is the default item — Ctrl+M then
+  // Enter memorizes, the old muscle memory. No page-level keydown here.
 
   // Feed autodiscovery: emit once after the page settles.
   try {
@@ -108,34 +95,7 @@
     el.__t = setTimeout(() => { el.style.opacity = "0"; }, 2800);
   }
 
-  // Ctrl+M memorizes the current page (parity with the Egg Browser). Handled
-  // in the page rather than via a chrome.commands shortcut because Chrome
-  // doesn't reliably auto-assign one. Skipped while typing in a field.
-  window.addEventListener(
-    "keydown",
-    (e) => {
-      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
-      if (e.key !== "m" && e.key !== "M") return;
-      const t = e.target;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      e.preventDefault();
-      eggToast("Saving to Egg…", "#7c5cff");
-      try {
-        // "article" = readable content only (no viewport screenshot, which can
-        // fail and isn't needed to memorize a page).
-        chrome.runtime.sendMessage({ type: "capture", kind: "article" }, (resp) => {
-          if (chrome.runtime.lastError) {
-            eggToast("Egg: reload this page and try again", "#ef4444");
-            return;
-          }
-          if (resp && resp.ok) eggToast("Saved to Egg ✓ — open Memorize to keep it", "#2fa84f");
-          else if (resp && resp.reason === "not_connected") eggToast("Connect this browser in the Egg extension", "#ef4444");
-          else eggToast("Egg: couldn't save this page", "#ef4444");
-        });
-      } catch (err) {
-        eggToast("Egg: extension unavailable", "#ef4444");
-      }
-    },
-    true,
-  );
+  // Ctrl+M now opens the Egg menu (handled by the background command, which
+  // grants activeTab). Nothing to do in the page.
+
 })();

@@ -24,7 +24,7 @@
   "commands": {
     "memorize-page": {
       "suggested_key": { "default": "Ctrl+M" },
-      "description": "Send the current page to Egg"
+      "description": "Open the Egg menu"
     }
   },
   "action": {

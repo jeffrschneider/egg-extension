@@ -164,18 +164,40 @@ async function render() {
     el(
       "div",
       { class: "actions" },
-      el("button", { onclick: () => capture("page") }, "Send page"),
-      el("button", { onclick: () => capture("article") }, "Send article"),
-      el("button", { onclick: () => capture("selection") }, "Send selection"),
+      el("button", { onclick: () => capture("page") }, "Memorize page"),
+      el("button", { onclick: () => capture("article") }, "Memorize article"),
+      el("button", { onclick: () => capture("selection") }, "Memorize selection"),
       el(
         "button",
         { onclick: () => capture("screenshot") },
-        "Send screenshot",
+        "Screenshot & crop",
       ),
     ),
   );
   root.appendChild(okEl);
   root.appendChild(errEl);
+
+  // Screenshot: closes the popup and starts the on-page crop. Destination is
+  // chosen AFTER cropping, in the page's chooser — not here.
+  root.appendChild(
+    el(
+      "div",
+      { class: "section" },
+      el(
+        "button",
+        {
+          class: "primary",
+          style: "width:100%",
+          onclick: () => {
+            chrome.runtime.sendMessage({ type: "start_screenshot" }).catch(() => {});
+            window.close();
+          },
+        },
+        "Snip a screenshot",
+      ),
+      el("div", { class: "muted", style: "font-size:11px;margin-top:4px" }, "Or press Ctrl+M → Screenshot & crop"),
+    ),
+  );
 
   root.appendChild(
     el(
