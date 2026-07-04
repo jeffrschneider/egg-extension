@@ -351,6 +351,69 @@ async function exportCookiesNetscape(domains) {
   return lines.join("\n") + "\n";
 }
 
+// ── Live feed cookies ────────────────────────────────────────────────
+// Social feeds (X, LinkedIn, Facebook, Instagram, YouTube) poll headlessly in
+// the Egg Gateway. A separately-captured login session gets invalidated by
+// strict platforms, so instead we push the user's LIVE cookies for each source
+// on a schedule; the Gateway injects them into every poll.
+const FEED_SOURCES = [
+  { source: "twitter", domains: ["x.com", "twitter.com"] },
+  { source: "instagram", domains: ["instagram.com"] },
+  { source: "linkedin", domains: ["linkedin.com"] },
+  { source: "facebook", domains: ["facebook.com"] },
+  { source: "youtube", domains: ["youtube.com", "google.com"] },
+];
+
+// chrome.cookies -> CDP Network.setCookie shape (what the poller injects).
+async function exportCdpCookies(domains) {
+  const out = [];
+  for (const domain of domains) {
+    let cookies = [];
+    try { cookies = await chrome.cookies.getAll({ domain }); } catch (e) { continue; }
+    for (const c of cookies) {
+      const ss = c.sameSite === "no_restriction" ? "None"
+               : c.sameSite === "lax" ? "Lax"
+               : c.sameSite === "strict" ? "Strict"
+               : null;
+      const cookie = {
+        name: c.name, value: c.value, domain: c.domain,
+        path: c.path || "/", secure: !!c.secure, httpOnly: !!c.httpOnly,
+      };
+      if (ss) cookie.sameSite = ss;
+      if (c.expirationDate) cookie.expires = c.expirationDate;
+      out.push(cookie);
+    }
+  }
+  return out;
+}
+
+// Push the current live cookies for every feed source to the Gateway.
+async function pushFeedCookies() {
+  if (!(await isPaired())) return;
+  const sources = {};
+  for (const fs of FEED_SOURCES) {
+    let cookies = [];
+    try { cookies = await exportCdpCookies(fs.domains); } catch (e) { continue; }
+    if (cookies.length) sources[fs.source] = cookies;
+  }
+  if (!Object.keys(sources).length) return;
+  try {
+    await gatewayPost("/api/extension/feed-cookies", { sources });
+    console.log("[Egg:FeedCookies] pushed", Object.keys(sources).join(", "));
+  } catch (e) {
+    console.warn("[Egg:FeedCookies] push failed", e);
+  }
+}
+
+const FEED_COOKIE_ALARM = "egg-feed-cookies";
+chrome.alarms.create(FEED_COOKIE_ALARM, { periodInMinutes: 30 });
+chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name === FEED_COOKIE_ALARM) pushFeedCookies();
+});
+// Also push once shortly after the worker wakes, so a fresh Connect or browser
+// restart refreshes cookies without waiting for the first 30-min tick.
+setTimeout(() => { pushFeedCookies(); }, 4000);
+
 // Download and/or transcribe the video at `url` via the Egg Gateway (yt-dlp +
 // captions). Results are pushed back to the page as a toast.
 async function handleVideoAction(action, url, tab) {
@@ -818,6 +881,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             pairedAt: Date.now(),
           });
           sendResponse({ ok: true });
+          // Refresh feed cookies immediately on connect.
+          pushFeedCookies();
           return;
         }
         case MSG.UNPAIR: {

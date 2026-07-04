@@ -17,7 +17,12 @@
     "http://127.0.0.1:*/*",
     "http://localhost:*/*",
     "https://*.youtube.com/*",
-    "https://*.google.com/*"
+    "https://*.google.com/*",
+    "https://*.x.com/*",
+    "https://*.twitter.com/*",
+    "https://*.linkedin.com/*",
+    "https://*.facebook.com/*",
+    "https://*.instagram.com/*"
   ],
   "optional_host_permissions": ["<all_urls>"],
   "background": {
