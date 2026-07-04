@@ -548,6 +548,37 @@ chrome.commands.onCommand.addListener(async (command) => {
 // Context-aware: on a recognized social profile, "Add to People" leads and is
 // the default (Enter), so Ctrl+M → Enter saves the person there; otherwise
 // Memorize is the default.
+// Inline lucide icon markup (the apps' own icons) for the Ctrl+M Apps dock —
+// the injected menu can't import an icon library.
+const APP_ICONS = {
+  brain: '<path d="M12 18V5"/><path d="M15 13a4.17 4.17 0 0 1-3-4 4.17 4.17 0 0 1-3 4"/><path d="M17.598 6.5A3 3 0 1 0 12 5a3 3 0 1 0-5.598 1.5"/><path d="M17.997 5.125a4 4 0 0 1 2.526 5.77"/><path d="M18 18a4 4 0 0 0 2-7.464"/><path d="M19.967 17.483A4 4 0 1 1 12 18a4 4 0 1 1-7.967-.517"/><path d="M6 18a4 4 0 0 1-2-7.464"/><path d="M6.003 5.125a4 4 0 0 0-2.526 5.77"/>',
+  compass: '<circle cx="12" cy="12" r="10"/><path d="m16.24 7.76-1.804 5.411a2 2 0 0 1-1.265 1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z"/>',
+  sparkles: '<path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"/><path d="M20 2v4"/><path d="M22 4h-4"/><circle cx="4" cy="20" r="2"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><path d="M16 3.128a4 4 0 0 1 0 7.744"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><circle cx="9" cy="7" r="4"/>',
+  rss: '<path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/>',
+  "gamepad-2": '<line x1="6" x2="10" y1="11" y2="11"/><line x1="8" x2="8" y1="9" y2="13"/><line x1="15" x2="15.01" y1="12" y2="12"/><line x1="18" x2="18.01" y1="10" y2="10"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/>',
+};
+
+// First-party Egg apps shown in the Ctrl+M menu's "Apps" dock. Each opens its
+// served egglet at the Gateway; "Browse all apps" opens the Gateway home.
+const EGG_APPS = [
+  { id: "memorize", label: "Memorize", icon: "brain" },
+  { id: "ponder", label: "Ponder", icon: "compass" },
+  { id: "studio", label: "Studio", icon: "sparkles" },
+  { id: "people", label: "People", icon: "users" },
+  { id: "feed", label: "Feed", icon: "rss" },
+  { id: "game-coach", label: "Game Coach", icon: "gamepad-2" },
+];
+
+// Open an Egg app (egglet) in a new tab, or the Gateway home when id is empty.
+async function openApp(appId) {
+  const cfg = await getConfig();
+  if (!cfg?.port) return { ok: false, reason: "not_connected" };
+  const base = `http://${cfg.host || "127.0.0.1"}:${cfg.port}`;
+  chrome.tabs.create({ url: appId ? `${base}/e/${appId}/` : `${base}/` });
+  return { ok: true };
+}
+
 async function openEggMenu(tab) {
   if (!tab) return;
   if (!(await isPaired())) {
@@ -563,9 +594,9 @@ async function openEggMenu(tab) {
     items.push({ action: "video_transcript", label: "Get video transcript", hint: "" });
   }
   items.push({ action: "screenshot", label: "Screenshot & crop", hint: "" });
-  items.push({ action: "coach_game", label: "Coach a game", hint: "" });
+  const apps = EGG_APPS.map((a) => ({ id: a.id, label: a.label, icon: APP_ICONS[a.icon] || "" }));
   try {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: pageEggMenu, args: [items, "Egg"] });
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: pageEggMenu, args: [items, "Egg", apps] });
   } catch {
     // Restricted page (chrome://) — can't show the menu; memorize directly.
     await runCapture({ kind: "article", tab });
@@ -596,10 +627,11 @@ async function openImageMenu(tab, srcUrl) {
   }
 }
 
-// Runs IN THE PAGE (injected). A keyboard-driven command palette: the first
-// item is pre-selected (Memorize), Enter fires it, ↑/↓ move, Esc/click-out
-// closes. Chosen action is posted back to the SW as {egg_action}.
-function pageEggMenu(items, title) {
+// Runs IN THE PAGE (injected). A keyboard-driven command palette: the page
+// actions are vertical rows (↑/↓ move, Enter fires the selected, first is
+// pre-selected). `apps`, when passed, renders a compact icon dock below the
+// actions — a launcher, mouse-driven, so it doesn't clutter the key nav.
+function pageEggMenu(items, title, apps) {
   if (window.__eggMenuActive) return;
   window.__eggMenuActive = true;
   const done = () => { window.__eggMenuActive = false; };
@@ -607,7 +639,7 @@ function pageEggMenu(items, title) {
   const back = document.createElement("div");
   back.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.4);display:flex;align-items:flex-start;justify-content:center;font:400 14px/1.4 system-ui,-apple-system,sans-serif";
   const card = document.createElement("div");
-  card.style.cssText = "margin-top:14vh;background:#15151c;color:#fff;border:1px solid #2a2a34;border-radius:14px;min-width:320px;max-width:440px;box-shadow:0 16px 50px rgba(0,0,0,.55);overflow:hidden";
+  card.style.cssText = "margin-top:14vh;background:#15151c;color:#fff;border:1px solid #2a2a34;border-radius:14px;min-width:340px;max-width:400px;box-shadow:0 16px 50px rgba(0,0,0,.55);overflow:hidden";
   const head = document.createElement("div");
   head.textContent = title || "Egg";
   head.style.cssText = "padding:12px 16px 6px;font-weight:700;font-size:12px;color:#a78bfa;letter-spacing:.04em";
@@ -618,37 +650,79 @@ function pageEggMenu(items, title) {
   back.appendChild(card);
   document.documentElement.appendChild(back);
 
+  const cleanup = () => { back.remove(); document.removeEventListener("keydown", onKey, true); done(); };
+  // Close the menu, then run the action after two frames so the menu-removed
+  // frame paints first (a screenshot/flourish must not capture the menu).
+  const fire = (action, payload) => {
+    cleanup();
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      chrome.runtime.sendMessage({ type: "egg_action", action, payload });
+    }));
+  };
+
   let sel = 0;
   const rows = items.map((it, i) => {
     const r = document.createElement("div");
-    r.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:16px;padding:10px 12px;border-radius:9px;cursor:pointer";
+    r.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:16px;padding:9px 12px;border-radius:9px;cursor:pointer";
     const lab = document.createElement("span"); lab.textContent = it.label; lab.style.cssText = "font-weight:500";
     const hint = document.createElement("span"); hint.textContent = it.hint || ""; hint.style.cssText = "font-size:11px;color:#8a8a96;border:1px solid #34343f;border-radius:5px;padding:1px 6px";
+    if (!it.hint) hint.style.display = "none";
     r.append(lab, hint);
     r.onmouseenter = () => { sel = i; paint(); };
-    r.onclick = () => choose();
+    r.onclick = () => fire(items[sel].action, items[sel].payload);
     list.appendChild(r);
     return r;
   });
   const paint = () => rows.forEach((r, i) => { r.style.background = i === sel ? "#2e2e3a" : "transparent"; });
   paint();
 
-  const cleanup = () => { back.remove(); document.removeEventListener("keydown", onKey, true); done(); };
-  const choose = () => {
-    const a = items[sel];
-    cleanup();
-    // Wait for the browser to paint the menu-removed frame before running the
-    // action — otherwise a screenshot (or the memorize flourish) captures the
-    // menu that's technically already removed from the DOM.
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      chrome.runtime.sendMessage({ type: "egg_action", action: a.action, payload: a.payload });
-    }));
-  };
+  // Apps dock — a row of icons under an "Apps" label, plus a browse link.
+  if (apps && apps.length) {
+    const appHead = document.createElement("div");
+    appHead.textContent = "APPS";
+    appHead.style.cssText = "padding:10px 14px 2px;font-size:10px;font-weight:700;letter-spacing:.06em;color:#6a6a76";
+    card.appendChild(appHead);
+    const dock = document.createElement("div");
+    dock.style.cssText = "display:flex;flex-wrap:wrap;gap:2px;padding:2px 8px 4px";
+    for (const app of apps) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.title = app.label;
+      b.style.cssText = "flex:0 0 auto;width:56px;display:flex;flex-direction:column;align-items:center;gap:5px;padding:8px 2px;background:transparent;border:0;border-radius:9px;cursor:pointer;color:#cfcfe0";
+      const ic = document.createElement("div");
+      ic.style.cssText = "display:flex;height:20px";
+      try {
+        // DOMParser (not innerHTML) so strict Trusted-Types pages (YouTube)
+        // don't block the icon markup.
+        const svgStr = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + app.icon + "</svg>";
+        const parsed = new DOMParser().parseFromString(svgStr, "image/svg+xml").documentElement;
+        ic.appendChild(document.importNode(parsed, true));
+      } catch (e) {
+        ic.textContent = app.label.slice(0, 1);
+      }
+      const lb = document.createElement("span"); lb.textContent = app.label;
+      lb.style.cssText = "font-size:10px;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:54px";
+      b.append(ic, lb);
+      b.onmouseenter = () => { b.style.background = "#2e2e3a"; };
+      b.onmouseleave = () => { b.style.background = "transparent"; };
+      b.onclick = () => fire("open_app", app.id);
+      dock.appendChild(b);
+    }
+    card.appendChild(dock);
+    const browse = document.createElement("div");
+    browse.textContent = "Browse all apps →";
+    browse.style.cssText = "padding:6px 14px 12px;color:#a78bfa;font-size:12px;cursor:pointer";
+    browse.onmouseenter = () => { browse.style.textDecoration = "underline"; };
+    browse.onmouseleave = () => { browse.style.textDecoration = "none"; };
+    browse.onclick = () => fire("browse_apps");
+    card.appendChild(browse);
+  }
+
   function onKey(e) {
     if (e.key === "Escape") { e.preventDefault(); cleanup(); }
     else if (e.key === "ArrowDown") { e.preventDefault(); sel = (sel + 1) % items.length; paint(); }
     else if (e.key === "ArrowUp") { e.preventDefault(); sel = (sel - 1 + items.length) % items.length; paint(); }
-    else if (e.key === "Enter") { e.preventDefault(); choose(); }
+    else if (e.key === "Enter") { e.preventDefault(); fire(items[sel].action, items[sel].payload); }
   }
   document.addEventListener("keydown", onKey, true);
   back.addEventListener("click", (e) => { if (e.target === back) cleanup(); });
@@ -707,6 +781,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           else if (msg.action === "screenshot") sendResponse(await startCrop(tab));
           else if (msg.action === "coach_game") sendResponse(await startCrop(tab, "game-coach"));
           else if (msg.action === "video_transcript") { handleVideoAction("transcript", tab?.url, tab); sendResponse({ ok: true }); }
+          else if (msg.action === "open_app") sendResponse(await openApp(msg.payload));
+          else if (msg.action === "browse_apps") sendResponse(await openApp(""));
           else if (msg.action === "people") sendResponse(await addToPeople(tab));
           else if (msg.action === "img_ponder") sendResponse(await sendImage(msg.payload, "ponder", tab));
           else if (msg.action === "img_studio") sendResponse(await sendImage(msg.payload, "studio", tab));
