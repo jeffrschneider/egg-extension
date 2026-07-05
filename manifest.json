@@ -17,12 +17,7 @@
     "http://127.0.0.1:*/*",
     "http://localhost:*/*",
     "https://*.youtube.com/*",
-    "https://*.google.com/*",
-    "https://*.x.com/*",
-    "https://*.twitter.com/*",
-    "https://*.linkedin.com/*",
-    "https://*.facebook.com/*",
-    "https://*.instagram.com/*"
+    "https://*.google.com/*"
   ],
   "optional_host_permissions": ["<all_urls>"],
   "background": {
@@ -53,6 +48,11 @@
     "open_in_tab": true
   },
   "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/menu.js"],
+      "run_at": "document_start"
+    },
     {
       "matches": ["<all_urls>"],
       "js": [

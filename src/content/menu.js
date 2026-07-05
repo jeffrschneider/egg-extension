@@ -1,105 +1,18 @@
-// Content script entry point.  The earlier scripts in the manifest's
-// content_scripts.js array have already attached helpers to window.
-
+// Egg menu — its message listener is registered at document_start so it's
+// present as early and reliably as possible, even on heavy pages whose
+// document_idle content-script injection lags or misses (e.g. cnbc). The
+// background sends "egg_show_menu"; we draw a keyboard-driven command palette
+// and report the user's pick back via an "egg_action" message. pageEggMenu is
+// only invoked when that message arrives (page fully loaded), so running the
+// registration at document_start is safe.
 (function () {
-  // Ctrl+M now opens the Egg menu (a command palette injected by the
-  // background on the keyboard command, which grants the activeTab that
-  // screenshot capture needs). Memorize is the default item — Ctrl+M then
-  // Enter memorizes, the old muscle memory. No page-level keydown here.
-
-  // Feed autodiscovery: emit once after the page settles.
-  try {
-    const feeds = window.__eggFeeds.scan();
-    if (feeds.length) {
-      chrome.runtime
-        .sendMessage({
-          type: "feed_discovered",
-          payload: {
-            pageUrl: location.href,
-            feedUrl: feeds[0].feedUrl,
-            title: feeds[0].title,
-            kind: feeds[0].kind,
-          },
-        })
-        .catch(() => {});
-    }
-  } catch {
-    /* tolerated: feed scan should never break the page */
-  }
-
-  // Reading signals: always run; background filters by per-host opt-in.
-  try {
-    window.__eggSignals.start();
-  } catch {
-    /* tolerated */
-  }
-
-  // Extraction requests from the background.  Returning true keeps the
-  // message channel open for the async sendResponse.
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (msg?.type !== "extract_request") return;
-    try {
-      switch (msg.kind) {
-        case "page":
-        case "article": {
-          const article = window.__eggReadable.extract();
-          sendResponse({
-            ok: true,
-            metadata: window.__eggExtract.pageMetadata(),
-            article,
-          });
-          return;
-        }
-        case "selection":
-          sendResponse({
-            ok: true,
-            ...window.__eggExtract.selectionPayload(),
-          });
-          return;
-        case "metadata":
-          sendResponse({
-            ok: true,
-            ...window.__eggExtract.pageMetadata(),
-          });
-          return;
-        default:
-          sendResponse({ ok: false, error: "Unknown extract kind" });
-      }
-    } catch (e) {
-      sendResponse({ ok: false, error: e?.message || String(e) });
+    if (msg?.type === "egg_show_menu") {
+      try { pageEggMenu(msg.items, msg.title, msg.apps); } catch { /* tolerated */ }
+      sendResponse({ ok: true });
     }
-    return true;
   });
 
-  // On-page feedback toast — the notification/badge live on the toolbar icon,
-  // which is easy to miss (unpinned icon, notifications off). This shows right
-  // on the page, like the Egg Browser's frame pulse.
-  function eggToast(text, color) {
-    let el = document.getElementById("__egg_toast");
-    if (!el) {
-      el = document.createElement("div");
-      el.id = "__egg_toast";
-      el.style.cssText = [
-        "position:fixed", "top:16px", "right:16px", "z-index:2147483647",
-        "background:#15151c", "color:#fff", "padding:10px 14px", "border-radius:10px",
-        "font:600 13px/1.3 system-ui,-apple-system,sans-serif",
-        "box-shadow:0 8px 30px rgba(0,0,0,.45)", "border:1px solid #2a2a34",
-        "transition:opacity .2s", "pointer-events:none", "max-width:320px",
-      ].join(";");
-      (document.body || document.documentElement).appendChild(el);
-    }
-    el.textContent = text;
-    el.style.borderLeft = "3px solid " + (color || "#7c5cff");
-    el.style.opacity = "1";
-    clearTimeout(el.__t);
-    el.__t = setTimeout(() => { el.style.opacity = "0"; }, 2800);
-  }
-
-  // The Ctrl+M / "Send to Egg…" menu is registered by menu.js at document_start
-  // (more reliable on heavy pages than this document_idle script). The unused
-  // function below is dead code, kept only to minimize this diff; removed next
-  // cleanup.
-  // eslint-disable-next-line no-unused-vars
   function pageEggMenu(items, title, apps) {
     if (window.__eggMenuActive) return;
     window.__eggMenuActive = true;
@@ -159,7 +72,6 @@
           const ic = document.createElement("div");
           ic.style.cssText = "display:flex;height:20px";
           try {
-            // DOMParser (not innerHTML) so strict Trusted-Types pages don't block it.
             const svgStr = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + app.icon + "</svg>";
             const parsed = new DOMParser().parseFromString(svgStr, "image/svg+xml").documentElement;
             ic.appendChild(document.importNode(parsed, true));
@@ -196,5 +108,4 @@
       window.__eggMenuActive = false;
     }
   }
-
 })();

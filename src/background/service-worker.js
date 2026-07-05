@@ -647,14 +647,24 @@ async function openEasyReading(tab) {
     return { ok: false, reason: "not_connected" };
   }
   let article = null;
+  // Prefer the content script (reliable host access on every site). Fall back
+  // to on-demand injection (the Ctrl+M command granted activeTab for this tab).
   try {
-    const [{ result }] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => (window.__eggReadable && window.__eggReadable.extract ? window.__eggReadable.extract() : null),
-    });
-    article = result;
-  } catch (e) {
-    /* restricted page / no content script */
+    const resp = await chrome.tabs.sendMessage(tab.id, { type: "extract_request", kind: "article" });
+    if (resp?.ok && resp.article) article = resp.article;
+  } catch {
+    /* content script not present yet — inject below */
+  }
+  if (!article) {
+    try {
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => (window.__eggReadable && window.__eggReadable.extract ? window.__eggReadable.extract() : null),
+      });
+      article = result;
+    } catch (e) {
+      /* restricted page / no content script */
+    }
   }
   if (!article || !article.html || article.kind === "fallback") {
     flashBadge("!", "#ef4444");
@@ -710,11 +720,29 @@ async function openEggMenu(tab) {
   }
   items.push({ action: "screenshot", label: "Screenshot & crop", hint: "" });
   const apps = EGG_APPS.map((a) => ({ id: a.id, label: a.label, icon: APP_ICONS[a.icon] || "" }));
+  await showEggMenu(tab, items, "Egg", apps);
+}
+
+// Show the menu on `tab` robustly. Prefer messaging the content script (fast,
+// no per-host scripting-permission dependency). If it isn't present yet (heavy
+// pages settle slowly and their document_idle content-script injection can lag
+// or miss), inject the menu on demand — the Ctrl+M command / context menu that
+// got us here granted activeTab for this tab. Only if BOTH fail (a truly
+// restricted page like chrome:// or the web store) do we fall back — to the
+// apps launcher, never a silent memorize.
+async function showEggMenu(tab, items, title, apps) {
   try {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: pageEggMenu, args: [items, "Egg", apps] });
+    await chrome.tabs.sendMessage(tab.id, { type: "egg_show_menu", items, title, apps });
+    return;
   } catch {
-    // Restricted page (chrome://) — can't show the menu; memorize directly.
-    await runCapture({ kind: "article", tab });
+    /* content script not present — inject on demand below */
+  }
+  try {
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: pageEggMenu, args: [items, title, apps] });
+  } catch (e) {
+    console.warn("[Egg] Ctrl+M menu couldn't render on", tab.url, "-", e);
+    flashBadge("!", "#f59e0b");
+    await openApp("");
   }
 }
 
@@ -735,6 +763,12 @@ async function openImageMenu(tab, srcUrl) {
     { action: "img_memorize", label: "Memorize image", payload: srcUrl },
   ];
   try {
+    await chrome.tabs.sendMessage(tab.id, { type: "egg_show_menu", items, title: "Egg — image" });
+    return;
+  } catch {
+    /* content script not present — inject on demand below */
+  }
+  try {
     await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: pageEggMenu, args: [items, "Egg — image"] });
   } catch {
     // Restricted page — fall back to sending the image URL straight to Ponder.
@@ -749,6 +783,7 @@ async function openImageMenu(tab, srcUrl) {
 function pageEggMenu(items, title, apps) {
   if (window.__eggMenuActive) return;
   window.__eggMenuActive = true;
+  try {
   const done = () => { window.__eggMenuActive = false; };
 
   const back = document.createElement("div");
@@ -841,6 +876,7 @@ function pageEggMenu(items, title, apps) {
   }
   document.addEventListener("keydown", onKey, true);
   back.addEventListener("click", (e) => { if (e.target === back) cleanup(); });
+  } catch (e) { window.__eggMenuActive = false; throw e; }
 }
 
 notifications.installPolling();
@@ -899,6 +935,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           else if (msg.action === "coach_game") sendResponse(await startCrop(tab, "game-coach"));
           else if (msg.action === "easy_reading") sendResponse(await openEasyReading(tab));
           else if (msg.action === "video_transcript") { handleVideoAction("transcript", tab?.url, tab); sendResponse({ ok: true }); }
+          // The Reader app inherently reads the current page — route its dock
+          // icon through the same extract+handoff as "Convert to Easy Reading"
+          // so it opens the article, not a sourceless Reader.
+          else if (msg.action === "open_app" && msg.payload === "reader") sendResponse(await openEasyReading(tab));
           else if (msg.action === "open_app") sendResponse(await openApp(msg.payload));
           else if (msg.action === "browse_apps") sendResponse(await openApp(""));
           else if (msg.action === "people") sendResponse(await addToPeople(tab));
