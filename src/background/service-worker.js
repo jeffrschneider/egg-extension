@@ -1,5 +1,5 @@
 import { MSG } from "../shared/messages.js";
-import { isPaired, getConfig, setConfig, gatewayPost } from "./gateway.js";
+import { isPaired, getConfig, setConfig, gatewayPost, gatewayGet } from "./gateway.js";
 import * as pairing from "./pairing.js";
 import * as perms from "./permissions.js";
 import * as menus from "./menus.js";
@@ -33,6 +33,42 @@ function flashBadge(text, color) {
     /* ignore */
   }
 }
+
+// ── Per-tab feed badge ────────────────────────────────────────────────
+// A PERSISTENT badge showing how many feeds the current page has. Scoped to
+// the tab (setBadgeText({ tabId })) so it stays independent of the transient
+// global flashBadge used for capture feedback. The detected feeds are cached
+// per tab so the popup and the "Add to Feed" action can read them back.
+const pageFeeds = new Map(); // tabId -> { pageUrl, feeds: [...] }
+
+function setFeedBadge(tabId, count) {
+  try {
+    chrome.action.setBadgeBackgroundColor({ color: "#7c5cff", tabId });
+    chrome.action.setBadgeText({ text: count > 0 ? String(count) : "", tabId });
+  } catch (e) {
+    console.log("[Egg:Feeds] badge set failed", e);
+  }
+}
+
+function clearFeedBadge(tabId) {
+  pageFeeds.delete(tabId);
+  try {
+    chrome.action.setBadgeText({ text: "", tabId });
+  } catch (e) {
+    /* tab likely gone — nothing to clear */
+  }
+}
+
+// Drop the cache + badge when a tab closes, or when it starts loading a new
+// page (the old feed set no longer applies until the content script re-scans).
+chrome.tabs.onRemoved.addListener((tabId) => {
+  pageFeeds.delete(tabId);
+});
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === "loading") {
+    clearFeedBadge(tabId);
+  }
+});
 
 // One capture path for the context menu and the keyboard shortcut, with
 // visible feedback either way.
@@ -70,9 +106,39 @@ menus.installMenus((args) => {
   if (args.kind === "page-menu") return openEggMenu(args.tab);
   if (args.kind === "image-menu") return openImageMenu(args.tab, args.url);
   if (args.kind === "link") return memorizeLink(args.url);
+  if (args.kind === "add-feed") return addFeedFromLink(args.url);
   if (args.kind === "selection-ponder") return ponderSelection(args.selection, args.tab);
   return runCapture(args);
 });
+
+// Right-click "Add to Egg Feed" on a link — follow the linked feed via the
+// Gateway. Feedback rides the same notification + flashBadge pattern as
+// captures: ✓ on success/already-following, ! on failure or a non-feed link.
+async function addFeedFromLink(url) {
+  if (!url) return { ok: false, reason: "no_link" };
+  if (!(await isPaired())) {
+    flashBadge("!", "#ef4444");
+    notify("Egg — not connected", "Open the Egg extension and click “Connect this browser”.");
+    return { ok: false, reason: "not_connected" };
+  }
+  try {
+    const res = await feeds.addFeed({ url });
+    if (res?.status === "invalid") {
+      flashBadge("!", "#f59e0b");
+      notify("Egg — not a feed", res.error || "That link isn't a readable feed.");
+      return { ok: false, reason: "invalid" };
+    }
+    flashBadge("✓", "#2fa84f");
+    const label = res?.title || url;
+    const items = res?.item_count ? ` — ${res.item_count} items` : "";
+    notify(res?.status === "already_following" ? "Already following" : "Following feed", label + items);
+    return { ok: true, ...res };
+  } catch (e) {
+    flashBadge("!", "#ef4444");
+    notify("Egg — couldn't add feed", e?.message || String(e));
+    return { ok: false, message: e?.message || String(e) };
+  }
+}
 
 // ── Screenshot snipping ───────────────────────────────────────────────
 // Flow: snap the viewport → the page shows a crop cropper (ported from the
@@ -703,7 +769,7 @@ async function openApp(appId) {
   return { ok: true };
 }
 
-async function openEggMenu(tab) {
+async function openEggMenu(tab, opts = {}) {
   if (!tab) return;
   if (!(await isPaired())) {
     flashBadge("!", "#ef4444");
@@ -720,7 +786,7 @@ async function openEggMenu(tab) {
   }
   items.push({ action: "screenshot", label: "Screenshot & crop", hint: "" });
   const apps = EGG_APPS.map((a) => ({ id: a.id, label: a.label, icon: APP_ICONS[a.icon] || "" }));
-  await showEggMenu(tab, items, "Egg", apps);
+  await showEggMenu(tab, items, "Egg", apps, !!opts.voice);
 }
 
 // Show the menu on `tab` robustly. Prefer messaging the content script (fast,
@@ -730,19 +796,22 @@ async function openEggMenu(tab) {
 // got us here granted activeTab for this tab. Only if BOTH fail (a truly
 // restricted page like chrome:// or the web store) do we fall back — to the
 // apps launcher, never a silent memorize.
-async function showEggMenu(tab, items, title, apps) {
+async function showEggMenu(tab, items, title, apps, voice = false) {
   try {
-    await chrome.tabs.sendMessage(tab.id, { type: "egg_show_menu", items, title, apps });
+    await chrome.tabs.sendMessage(tab.id, { type: "egg_show_menu", items, title, apps, voice });
     return;
   } catch {
     /* content script not present — inject on demand below */
   }
   try {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: pageEggMenu, args: [items, title, apps] });
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: pageEggMenu, args: [items, title, apps, voice] });
   } catch (e) {
     console.warn("[Egg] Ctrl+M menu couldn't render on", tab.url, "-", e);
     flashBadge("!", "#f59e0b");
-    await openApp("");
+    // A restricted page (chrome://, the web store). For a voice trigger, just
+    // warn — don't yank the user to the Gateway home. Keyboard Ctrl+M still
+    // falls back to the apps launcher.
+    if (!voice) await openApp("");
   }
 }
 
@@ -881,6 +950,61 @@ function pageEggMenu(items, title, apps) {
 
 notifications.installPolling();
 commands.installCommandPolling();
+
+// Instant voice → Ctrl+M menu. The Gateway's always-on listener pushes an
+// "open_menu" event the moment it hears "Hey Egg"; we hold a long-poll open
+// (`/api/extension/voice-wait`) so the menu appears with no delay. Keeping a
+// fetch in-flight also keeps this MV3 worker alive; if it's ever torn down, the
+// 1-minute command alarm re-kicks the loop.
+let voiceLoopRunning = false;
+async function voiceWaitLoop() {
+  if (voiceLoopRunning) return;
+  voiceLoopRunning = true;
+  console.log("[egg-ext] voice wake loop started");
+  try {
+    while (await isPaired()) {
+      let resp;
+      try {
+        resp = await gatewayGet("/api/extension/voice-wait");
+      } catch (e) {
+        console.warn("[egg-ext] voice-wait error, retrying:", e?.message || e);
+        await new Promise((r) => setTimeout(r, 1500)); // gateway restarting — retry soon
+        continue;
+      }
+      if (resp?.event) console.log("[egg-ext] voice event:", resp.event, resp.text || "");
+      if (!resp || !resp.event) continue;
+      if (resp.event === "open_menu") {
+        try {
+          await openEggMenu(await getActiveTab(), { voice: true });
+        } catch (e) {
+          console.warn("[egg-ext] voice open menu failed:", e?.message || e);
+        }
+      } else if (resp.event === "transcript" || resp.event === "answer") {
+        // Live "what you're saying" / answer text for the menu's voice header.
+        try {
+          const tab = await getActiveTab();
+          if (tab?.id != null) {
+            chrome.tabs
+              .sendMessage(tab.id, { type: "egg_voice_transcript", text: resp.text || "", kind: resp.event })
+              .catch(() => {});
+          }
+        } catch {
+          /* no active tab */
+        }
+      }
+    }
+  } finally {
+    voiceLoopRunning = false;
+    console.log("[egg-ext] voice wake loop stopped");
+  }
+}
+chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name === "egg-poll-commands") voiceWaitLoop();
+});
+// Restart the loop on any wake-up of the service worker, so it re-establishes
+// its connection promptly after Chrome idles it or the Gateway restarts.
+chrome.runtime.onStartup?.addListener(() => voiceWaitLoop());
+voiceWaitLoop();
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   (async () => {
@@ -1027,10 +1151,52 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           return;
         }
         case MSG.FEED_DISCOVERED: {
-          if (await isPaired()) {
-            await feeds.reportDiscovered(msg.payload);
+          // Payload is now { pageUrl, feeds: [{ feedUrl, title, kind, sourceType? }] }.
+          const tabId = _sender?.tab?.id;
+          const pageUrl = msg.payload?.pageUrl;
+          const list = Array.isArray(msg.payload?.feeds) ? msg.payload.feeds : [];
+          if (tabId != null && list.length) {
+            pageFeeds.set(tabId, { pageUrl, feeds: list });
+            setFeedBadge(tabId, list.length);
+            console.log("[Egg:Feeds] tab", tabId, "has", list.length, "feed(s)");
+          }
+          // Ambient discovery log — forward the primary hit (unchanged volume).
+          if (list.length && (await isPaired())) {
+            const f = list[0];
+            await feeds.reportDiscovered({ pageUrl, feedUrl: f.feedUrl, title: f.title, kind: f.kind });
           }
           sendResponse({ ok: true });
+          return;
+        }
+        case "egg_get_page_feeds": {
+          // Popup asked for this tab's detected feeds + their follow-status.
+          const tab = _sender?.tab || (await getActiveTab());
+          const entry = tab ? pageFeeds.get(tab.id) : null;
+          const list = entry?.feeds || [];
+          let following = {};
+          if (list.length && (await isPaired())) {
+            try {
+              following = (await feeds.feedStatus(list.map((f) => f.feedUrl)))?.following || {};
+            } catch (e) {
+              console.warn("[Egg:Feeds] status lookup failed", e?.message || e);
+            }
+          }
+          sendResponse({ ok: true, feeds: list, following });
+          return;
+        }
+        case "egg_add_feed": {
+          // Popup "Add to Feed" button. msg.feed = { feedUrl, sourceType?, title? }.
+          if (!(await isPaired())) {
+            sendResponse({ ok: false, reason: "not_connected" });
+            return;
+          }
+          const f = msg.feed || {};
+          try {
+            const res = await feeds.addFeed({ url: f.feedUrl, sourceType: f.sourceType, label: f.title });
+            sendResponse({ ok: true, ...res });
+          } catch (e) {
+            sendResponse({ ok: false, error: e?.message || String(e) });
+          }
           return;
         }
         case MSG.SIGNAL_BATCH: {

@@ -177,6 +177,18 @@ async function render() {
   root.appendChild(okEl);
   root.appendChild(errEl);
 
+  // Feeds on this page — one-click follow. Populated asynchronously; the
+  // section stays hidden until we know the tab actually has feeds.
+  const feedsList = el("div", { class: "feeds" });
+  const feedsSection = el(
+    "div",
+    { class: "section", style: "display:none" },
+    el("div", { class: "section-title" }, "Feeds on this page"),
+    feedsList,
+  );
+  root.appendChild(feedsSection);
+  loadFeeds(feedsSection, feedsList);
+
   // Screenshot: closes the popup and starts the on-page crop. Destination is
   // chosen AFTER cropping, in the page's chooser — not here.
   root.appendChild(
@@ -228,6 +240,78 @@ async function render() {
       ),
     ),
   );
+}
+
+// A readable host label for a feed (smart source tokens like "top" have no
+// parseable URL, so fall back to the known host or the feed's kind).
+function feedHost(feed) {
+  if (feed.sourceType === "hn") return "news.ycombinator.com";
+  try {
+    return new URL(feed.feedUrl).hostname.replace(/^www\./, "");
+  } catch {
+    return feed.kind || "";
+  }
+}
+
+function feedRow(feed, alreadyFollowing) {
+  const title = feed.title || feedHost(feed) || feed.feedUrl;
+  const btn = el("button", { class: "feed-btn" });
+  const markFollowing = () => {
+    btn.textContent = "Following ✓";
+    btn.disabled = true;
+    btn.classList.add("following");
+  };
+  if (alreadyFollowing) {
+    markFollowing();
+  } else {
+    btn.textContent = "Add to Feed";
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "Adding…";
+      try {
+        const r = await send("egg_add_feed", { feed });
+        console.log("[Egg:Feeds] add result", r);
+        if (r?.ok && (r.status === "added" || r.status === "already_following")) {
+          markFollowing();
+        } else {
+          btn.disabled = false;
+          btn.textContent = "Add to Feed";
+        }
+      } catch (e) {
+        console.log("[Egg:Feeds] add error", e);
+        btn.disabled = false;
+        btn.textContent = "Add to Feed";
+      }
+    });
+  }
+  return el(
+    "div",
+    { class: "feed-row" },
+    el(
+      "div",
+      { class: "feed-info" },
+      el("div", { class: "feed-title", title }, title),
+      el("div", { class: "feed-host" }, feedHost(feed)),
+    ),
+    btn,
+  );
+}
+
+async function loadFeeds(section, list) {
+  let resp;
+  try {
+    resp = await send("egg_get_page_feeds");
+  } catch (e) {
+    console.log("[Egg:Feeds] popup fetch failed", e);
+    return;
+  }
+  const feeds = resp?.feeds || [];
+  const following = resp?.following || {};
+  console.log("[Egg:Feeds] popup got", feeds.length, "feed(s)");
+  if (!feeds.length) return; // leave the section hidden
+  list.innerHTML = "";
+  for (const f of feeds) list.appendChild(feedRow(f, !!following[f.feedUrl]));
+  section.style.display = "";
 }
 
 document.addEventListener("DOMContentLoaded", render);

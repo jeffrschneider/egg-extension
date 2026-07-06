@@ -5,6 +5,7 @@ const MENU_IDS = {
   SELECTION: "egg-send-selection",
   SELECTION_PONDER: "egg-ponder-selection",
   LINK: "egg-send-link",
+  ADD_FEED: "egg-add-feed",
   IMAGE: "egg-send-image",
   SHOT: "egg-shot",
 };
@@ -43,6 +44,12 @@ function buildMenus() {
     chrome.contextMenus.create({
       id: MENU_IDS.LINK,
       title: "Memorize linked page",
+      contexts: ["link"],
+    });
+    // Follow the link's feed (RSS/Atom or a smart source) directly in Egg.
+    chrome.contextMenus.create({
+      id: MENU_IDS.ADD_FEED,
+      title: "Add to Egg Feed",
       contexts: ["link"],
     });
 
@@ -90,6 +97,9 @@ export function installMenus(onClick) {
         break;
       case MENU_IDS.LINK:
         onClick({ kind: "link", tab, url: info.linkUrl });
+        break;
+      case MENU_IDS.ADD_FEED:
+        onClick({ kind: "add-feed", tab, url: info.linkUrl });
         break;
     }
   });

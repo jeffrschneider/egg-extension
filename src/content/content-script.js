@@ -7,24 +7,23 @@
   // screenshot capture needs). Memorize is the default item — Ctrl+M then
   // Enter memorizes, the old muscle memory. No page-level keydown here.
 
-  // Feed autodiscovery: emit once after the page settles.
+  // Feed autodiscovery: emit once after the page settles. Send the FULL list
+  // so the service worker can badge the tab and offer every feed in the popup;
+  // it also forwards the first hit to the ambient discovery log.
   try {
     const feeds = window.__eggFeeds.scan();
     if (feeds.length) {
       chrome.runtime
         .sendMessage({
           type: "feed_discovered",
-          payload: {
-            pageUrl: location.href,
-            feedUrl: feeds[0].feedUrl,
-            title: feeds[0].title,
-            kind: feeds[0].kind,
-          },
+          payload: { pageUrl: location.href, feeds },
         })
         .catch(() => {});
+      console.log("[Egg:Feeds] reported " + feeds.length + " feed(s) to service worker");
     }
-  } catch {
+  } catch (e) {
     /* tolerated: feed scan should never break the page */
+    console.log("[Egg:Feeds] content scan error", e);
   }
 
   // Reading signals: always run; background filters by per-host opt-in.

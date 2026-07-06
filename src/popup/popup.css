@@ -86,3 +86,44 @@ a {
 a:hover {
   text-decoration: underline;
 }
+.section-title {
+  font-weight: 600;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.feeds {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.feed-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.feed-info {
+  flex: 1;
+  min-width: 0;
+}
+.feed-title {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.feed-host {
+  font-size: 11px;
+  color: #888;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.feed-btn {
+  flex: 0 0 auto;
+  font-size: 12px;
+  padding: 5px 9px;
+}
+.feed-btn.following {
+  color: #2ecc71;
+  border-color: rgba(46, 204, 113, 0.4);
+}
