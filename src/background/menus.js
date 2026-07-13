@@ -4,6 +4,7 @@ const MENU_IDS = {
   PAGE: "egg-send-page",
   SELECTION: "egg-send-selection",
   SELECTION_PONDER: "egg-ponder-selection",
+  SELECTION_READ: "egg-read-selection",
   LINK: "egg-send-link",
   ADD_FEED: "egg-add-feed",
   IMAGE: "egg-send-image",
@@ -39,6 +40,12 @@ function buildMenus() {
     chrome.contextMenus.create({
       id: MENU_IDS.SELECTION_PONDER,
       title: "Ponder selection",
+      contexts: ["selection"],
+    });
+    // Hear the selection read aloud via the Gateway's text-to-speech.
+    chrome.contextMenus.create({
+      id: MENU_IDS.SELECTION_READ,
+      title: "Read aloud with Egg",
       contexts: ["selection"],
     });
     chrome.contextMenus.create({
@@ -91,6 +98,13 @@ export function installMenus(onClick) {
       case MENU_IDS.SELECTION_PONDER:
         onClick({
           kind: "selection-ponder",
+          tab,
+          selection: info.selectionText || "",
+        });
+        break;
+      case MENU_IDS.SELECTION_READ:
+        onClick({
+          kind: "read-aloud",
           tab,
           selection: info.selectionText || "",
         });

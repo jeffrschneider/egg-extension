@@ -8,6 +8,7 @@ import * as signals from "./signals.js";
 import * as notifications from "./notifications.js";
 import * as commands from "./commands.js";
 import { dispatch, resizeDataUrl, extractArticle } from "./dispatch.js";
+import { speak, transcribe } from "./speech.js";
 
 // Chrome has no native capture feedback like the Egg Browser's frame pulse,
 // so confirm every capture with a notification and a brief toolbar badge.
@@ -108,8 +109,30 @@ menus.installMenus((args) => {
   if (args.kind === "link") return memorizeLink(args.url);
   if (args.kind === "add-feed") return addFeedFromLink(args.url);
   if (args.kind === "selection-ponder") return ponderSelection(args.selection, args.tab);
+  if (args.kind === "read-aloud") return readAloud(args.selection);
   return runCapture(args);
 });
+
+// Right-click "Read aloud with Egg" on selected text — the Gateway synthesizes
+// speech (honoring the Live speech slot) and an offscreen document plays it.
+async function readAloud(selection) {
+  const text = (selection || "").trim();
+  if (!text) return { ok: false, reason: "no_selection" };
+  if (!(await isPaired())) {
+    flashBadge("!", "#ef4444");
+    notify("Egg — not connected", "Open the Egg extension and click “Connect this browser”.");
+    return { ok: false, reason: "not_connected" };
+  }
+  try {
+    flashBadge("♪", "#7c5cff");
+    await speak(text);
+    return { ok: true };
+  } catch (e) {
+    flashBadge("!", "#ef4444");
+    notify("Egg — couldn't read aloud", e?.message || String(e));
+    return { ok: false, message: e?.message || String(e) };
+  }
+}
 
 // Right-click "Add to Egg Feed" on a link — follow the linked feed via the
 // Gateway. Feedback rides the same notification + flashBadge pattern as
@@ -1007,6 +1030,9 @@ chrome.runtime.onStartup?.addListener(() => voiceWaitLoop());
 voiceWaitLoop();
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  // Messages addressed to the offscreen audio document are handled there, not
+  // here — ignore them so we don't answer with "unknown message".
+  if (msg?.target === "offscreen") return false;
   (async () => {
     try {
       switch (msg?.type) {
@@ -1194,6 +1220,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           try {
             const res = await feeds.addFeed({ url: f.feedUrl, sourceType: f.sourceType, label: f.title });
             sendResponse({ ok: true, ...res });
+          } catch (e) {
+            sendResponse({ ok: false, error: e?.message || String(e) });
+          }
+          return;
+        }
+        case "egg_transcribe": {
+          // Popup dictation: recorded mic bytes → Gateway STT (live_stt slot).
+          if (!(await isPaired())) {
+            sendResponse({ ok: false, error: "Not connected to a Gateway." });
+            return;
+          }
+          try {
+            const transcript = await transcribe(msg.audioB64);
+            sendResponse({ ok: true, transcript });
           } catch (e) {
             sendResponse({ ok: false, error: e?.message || String(e) });
           }

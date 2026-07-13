@@ -177,6 +177,9 @@ async function render() {
   root.appendChild(okEl);
   root.appendChild(errEl);
 
+  // Dictation — capture the mic here, the Gateway transcribes (live_stt slot).
+  root.appendChild(dictationSection());
+
   // Feeds on this page — one-click follow. Populated asynchronously; the
   // section stays hidden until we know the tab actually has feeds.
   const feedsList = el("div", { class: "feeds" });
@@ -239,6 +242,100 @@ async function render() {
         "Unpair",
       ),
     ),
+  );
+}
+
+// Read a recorded audio Blob as base64 (strips the data: URL prefix).
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onloadend = () => resolve(String(r.result).split(",")[1] || "");
+    r.onerror = reject;
+    r.readAsDataURL(blob);
+  });
+}
+
+// Push-to-talk dictation. The popup captures the mic (MediaRecorder → webm),
+// hands the bytes to the service worker, which forwards them to the Gateway's
+// STT (live_stt slot). The transcript comes back for copy/paste. The extension
+// runs no speech engine — it's just the audio endpoint.
+function dictationSection() {
+  const inputStyle =
+    "width:100%;box-sizing:border-box;margin-top:6px;font:12px system-ui,sans-serif;border-radius:6px;padding:6px;resize:vertical";
+  const out = el("textarea", { rows: "3", placeholder: "Transcript will appear here…", style: inputStyle });
+  const statusLine = el("div", { class: "muted", style: "font-size:11px;margin-top:4px" }, "");
+  const copyBtn = el(
+    "button",
+    {
+      style: "margin-top:6px;display:none",
+      onclick: async () => {
+        try {
+          await navigator.clipboard.writeText(out.value || "");
+          statusLine.textContent = "Copied.";
+        } catch {
+          statusLine.textContent = "Copy failed.";
+        }
+      },
+    },
+    "Copy",
+  );
+  const btn = el("button", { class: "primary", style: "width:100%" }, "🎙 Dictate");
+
+  let mediaRecorder = null;
+  let stream = null;
+  let chunks = [];
+  let recording = false;
+
+  async function start() {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      statusLine.textContent = "Microphone blocked — allow mic access for the Egg extension.";
+      return;
+    }
+    chunks = [];
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = (ev) => { if (ev.data && ev.data.size) chunks.push(ev.data); };
+    mediaRecorder.onstop = async () => {
+      const blob = new Blob(chunks, { type: mediaRecorder.mimeType || "audio/webm" });
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+      statusLine.textContent = "Transcribing…";
+      try {
+        const audioB64 = await blobToBase64(blob);
+        const r = await send("egg_transcribe", { audioB64 });
+        if (r?.ok) {
+          out.value = r.transcript || "";
+          copyBtn.style.display = out.value ? "" : "none";
+          statusLine.textContent = out.value ? "" : "No speech detected.";
+        } else {
+          statusLine.textContent = r?.error || "Transcription failed.";
+        }
+      } catch (e) {
+        statusLine.textContent = e?.message || "Transcription failed.";
+      }
+    };
+    mediaRecorder.start();
+    recording = true;
+    btn.textContent = "■ Stop";
+    statusLine.textContent = "Listening…";
+  }
+
+  function stop() {
+    recording = false;
+    btn.textContent = "🎙 Dictate";
+    if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+  }
+
+  btn.addEventListener("click", () => (recording ? stop() : start()));
+
+  return el(
+    "div",
+    { class: "section" },
+    el("div", { class: "section-title" }, "Dictate"),
+    btn,
+    statusLine,
+    out,
+    copyBtn,
   );
 }
 
