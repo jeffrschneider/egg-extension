@@ -809,7 +809,7 @@ async function openEggMenu(tab, opts = {}) {
   }
   items.push({ action: "screenshot", label: "Screenshot & crop", hint: "" });
   const apps = EGG_APPS.map((a) => ({ id: a.id, label: a.label, icon: APP_ICONS[a.icon] || "" }));
-  await showEggMenu(tab, items, "Egg", apps, !!opts.voice);
+  await showEggMenu(tab, items, "Egg", apps);
 }
 
 // Show the menu on `tab` robustly. Prefer messaging the content script (fast,
@@ -819,22 +819,21 @@ async function openEggMenu(tab, opts = {}) {
 // got us here granted activeTab for this tab. Only if BOTH fail (a truly
 // restricted page like chrome:// or the web store) do we fall back — to the
 // apps launcher, never a silent memorize.
-async function showEggMenu(tab, items, title, apps, voice = false) {
+async function showEggMenu(tab, items, title, apps) {
   try {
-    await chrome.tabs.sendMessage(tab.id, { type: "egg_show_menu", items, title, apps, voice });
+    await chrome.tabs.sendMessage(tab.id, { type: "egg_show_menu", items, title, apps });
     return;
   } catch {
     /* content script not present — inject on demand below */
   }
   try {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: pageEggMenu, args: [items, title, apps, voice] });
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: pageEggMenu, args: [items, title, apps] });
   } catch (e) {
     console.warn("[Egg] Ctrl+M menu couldn't render on", tab.url, "-", e);
     flashBadge("!", "#f59e0b");
-    // A restricted page (chrome://, the web store). For a voice trigger, just
-    // warn — don't yank the user to the Gateway home. Keyboard Ctrl+M still
-    // falls back to the apps launcher.
-    if (!voice) await openApp("");
+    // A restricted page (chrome://, the web store): fall back to the apps
+    // launcher rather than a silent memorize.
+    await openApp("");
   }
 }
 
@@ -974,60 +973,12 @@ function pageEggMenu(items, title, apps) {
 notifications.installPolling();
 commands.installCommandPolling();
 
-// Instant voice → Ctrl+M menu. The Gateway's always-on listener pushes an
-// "open_menu" event the moment it hears "Hey Egg"; we hold a long-poll open
-// (`/api/extension/voice-wait`) so the menu appears with no delay. Keeping a
-// fetch in-flight also keeps this MV3 worker alive; if it's ever torn down, the
-// 1-minute command alarm re-kicks the loop.
-let voiceLoopRunning = false;
-async function voiceWaitLoop() {
-  if (voiceLoopRunning) return;
-  voiceLoopRunning = true;
-  console.log("[egg-ext] voice wake loop started");
-  try {
-    while (await isPaired()) {
-      let resp;
-      try {
-        resp = await gatewayGet("/api/extension/voice-wait");
-      } catch (e) {
-        console.warn("[egg-ext] voice-wait error, retrying:", e?.message || e);
-        await new Promise((r) => setTimeout(r, 1500)); // gateway restarting — retry soon
-        continue;
-      }
-      if (resp?.event) console.log("[egg-ext] voice event:", resp.event, resp.text || "");
-      if (!resp || !resp.event) continue;
-      if (resp.event === "open_menu") {
-        try {
-          await openEggMenu(await getActiveTab(), { voice: true });
-        } catch (e) {
-          console.warn("[egg-ext] voice open menu failed:", e?.message || e);
-        }
-      } else if (resp.event === "transcript" || resp.event === "answer") {
-        // Live "what you're saying" / answer text for the menu's voice header.
-        try {
-          const tab = await getActiveTab();
-          if (tab?.id != null) {
-            chrome.tabs
-              .sendMessage(tab.id, { type: "egg_voice_transcript", text: resp.text || "", kind: resp.event })
-              .catch(() => {});
-          }
-        } catch {
-          /* no active tab */
-        }
-      }
-    }
-  } finally {
-    voiceLoopRunning = false;
-    console.log("[egg-ext] voice wake loop stopped");
-  }
-}
-chrome.alarms.onAlarm.addListener((a) => {
-  if (a.name === "egg-poll-commands") voiceWaitLoop();
-});
-// Restart the loop on any wake-up of the service worker, so it re-establishes
-// its connection promptly after Chrome idles it or the Gateway restarts.
-chrome.runtime.onStartup?.addListener(() => voiceWaitLoop());
-voiceWaitLoop();
+// The always-on "Hey Egg" voice listener was removed from the Gateway on
+// 2026-07-06, but this worker kept long-polling `/api/extension/voice-wait`
+// for it. The route 404s, gatewayFetch throws on non-2xx, and the catch
+// retried every 1.5s forever — so every paired browser ran an infinite error
+// loop that also pinned this MV3 worker awake. Removed 2026-07-28 along with
+// the `voice` menu header and the `egg_voice_transcript` message it fed.
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   // Messages addressed to the offscreen audio document are handled there, not

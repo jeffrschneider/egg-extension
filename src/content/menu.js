@@ -6,32 +6,18 @@
 // only invoked when that message arrives (page fully loaded), so running the
 // registration at document_start is safe.
 (function () {
-  // When the menu is opened by voice ("Hey Egg"), a header at the top shows,
-  // live, what the Gateway is hearing and then the answer. The service worker
-  // relays the Gateway's transcript/answer events as "egg_voice_transcript".
-  let voiceHeaderEl = null;
-  function updateVoiceHeader(text, kind) {
-    if (!voiceHeaderEl) return;
-    if (kind === "answer") {
-      voiceHeaderEl.textContent = text || "";
-      voiceHeaderEl.style.color = "#4ade80";
-    } else {
-      voiceHeaderEl.textContent = text ? "“" + text + "”" : "🎤 Listening…";
-      voiceHeaderEl.style.color = "#fff";
-    }
-  }
+  // The voice header that showed what the Gateway was hearing is gone with the
+  // "Hey Egg" listener the Gateway removed on 2026-07-06. Its feed, the
+  // "egg_voice_transcript" message, had no sender left.
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg?.type === "egg_show_menu") {
-      try { pageEggMenu(msg.items, msg.title, msg.apps, msg.voice); } catch { /* tolerated */ }
-      sendResponse({ ok: true });
-    } else if (msg?.type === "egg_voice_transcript") {
-      try { updateVoiceHeader(msg.text, msg.kind); } catch { /* tolerated */ }
+      try { pageEggMenu(msg.items, msg.title, msg.apps); } catch { /* tolerated */ }
       sendResponse({ ok: true });
     }
   });
 
-  function pageEggMenu(items, title, apps, voice) {
+  function pageEggMenu(items, title, apps) {
     if (window.__eggMenuActive) return;
     window.__eggMenuActive = true;
     try {
@@ -45,20 +31,13 @@
       head.textContent = title || "Egg";
       head.style.cssText = "padding:12px 16px 6px;font-weight:700;font-size:12px;color:#a78bfa;letter-spacing:.04em";
       card.appendChild(head);
-      if (voice) {
-        const vh = document.createElement("div");
-        vh.textContent = "🎤 Listening…";
-        vh.style.cssText = "padding:14px 16px;font-size:16px;font-weight:600;color:#fff;border-bottom:1px solid #2a2a34;background:#1b1b24;word-break:break-word";
-        card.insertBefore(vh, card.firstChild);
-        voiceHeaderEl = vh;
-      }
       const list = document.createElement("div");
       list.style.cssText = "padding:4px";
       card.appendChild(list);
       back.appendChild(card);
       document.documentElement.appendChild(back);
 
-      const cleanup = () => { back.remove(); document.removeEventListener("keydown", onKey, true); voiceHeaderEl = null; done(); };
+      const cleanup = () => { back.remove(); document.removeEventListener("keydown", onKey, true); done(); };
       const fire = (action, payload) => {
         cleanup();
         requestAnimationFrame(() => requestAnimationFrame(() => {
