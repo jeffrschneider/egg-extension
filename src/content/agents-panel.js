@@ -487,7 +487,16 @@
       busy = true;
       send.disabled = true;
       input.placeholder = "Waiting for " + (agent.handle || agent.name) + "...";
-      const r = await ask({ op: "ask", agentId: id, message: text, pageUrl, files: file ? [file] : undefined });
+      // The attachment also goes in the message itself, not only in `files`.
+      // Two reasons. An empty message is not a message: sending one with only
+      // an attachment produced a model call with no content at all, which the
+      // far end rejected outright. And most agents today read the text and
+      // nothing else, so an address named in the fenced field is the only part
+      // of an attachment they will ever notice.
+      const sent = file
+        ? (text ? text + "\n\n" : "") + "[attached image: " + file.uri + "]"
+        : text;
+      const r = await ask({ op: "ask", agentId: id, message: sent, pageUrl, files: file ? [file] : undefined });
       busy = false;
       send.disabled = false;
       input.placeholder = "Message " + (agent.handle || agent.name);
