@@ -96,6 +96,12 @@
       .msg.user { align-self: flex-end; background: #262633; padding: 7px 10px; border-radius: 10px 10px 2px 10px; }
       .msg.agent { align-self: flex-start; background: #1c1c25; padding: 7px 10px; border-radius: 10px 10px 10px 2px; }
       .msg.err { color: #f87171; }
+      .panel.over { outline: 2px dashed #6d5cf0; outline-offset: -6px; }
+      .attach { display: none; align-items: center; gap: 6px; padding: 8px 10px; border-top: 1px solid #24242e; font-size: 11px; color: #8a8a96; }
+      .attach .file { background: #23232e; color: #cfcfe0; border-radius: 6px; padding: 3px 8px; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .attach .note { color: #fbbf24; }
+      .attach .rm { background: transparent; border: 0; color: #8a8a96; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 4px; }
+      .attach .rm:hover { color: #e6e6ef; }
       .composer { display: flex; gap: 6px; padding: 10px; border-top: 1px solid #24242e; }
       .composer input { flex: 1; min-width: 0; background: #101017; color: #e6e6ef; border: 1px solid #2a2a34; border-radius: 8px; padding: 7px 9px; font: inherit; font-size: 12px; outline: none; }
       .composer input:focus { border-color: #6d5cf0; }
@@ -255,6 +261,51 @@
     };
   }
 
+  // ── Dropping things into a conversation ──────────────────────────────
+  // This panel lives in the page's own document, so a drag from the page to
+  // here is an ordinary drop: no permission, no second window. The toolbar
+  // popup cannot do this at all, because pressing the mouse down on the page
+  // blurs it and a popup that lost focus has already closed.
+  //
+  // What a page drag actually hands over decides the shape of this. Text
+  // arrives as text and goes straight into the composer. An image arrives as
+  // its ADDRESS, not its bytes, so it rides along as a file with a `uri` --
+  // the same shape the A2A bridge maps in both directions -- and whoever
+  // receives it fetches it. Bytes from the desktop are a different feature and
+  // say so rather than failing quietly.
+  const pendingFiles = new Map(); // agent_id -> { uri, name, media_type }
+
+  const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|svg)(?:[?#]|$)/i;
+  const MAX_DROPPED_TEXT = 2000;
+
+  /** The image a drag is carrying, if it is carrying one: the dragged <img>
+   *  itself first, then a dragged link that names an image. A link to anything
+   *  else is not an image and falls through to the text path. */
+  function draggedImage(dt) {
+    const html = dt.getData("text/html") || "";
+    const tag = /<img[^>]+src\s*=\s*["']([^"']+)["']/i.exec(html);
+    if (tag) return tag[1];
+    const uri = (dt.getData("text/uri-list") || "")
+      .split("\n")
+      .map((s) => s.trim())
+      .find((s) => s && !s.startsWith("#"));
+    return uri && IMAGE_EXT.test(uri) ? uri : null;
+  }
+
+  /** A dragged image URL as the file a message can carry, or null when it has
+   *  no address anyone else could fetch (data: and blob: are the page's own
+   *  private handles, not somewhere to send an agent). */
+  function fileFromUrl(raw) {
+    let u;
+    try { u = new URL(raw, location.href); } catch { return null; }
+    if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+    let name = "image";
+    try { name = decodeURIComponent(u.pathname.split("/").filter(Boolean).pop() || "image"); } catch { /* keep the default */ }
+    const ext = (IMAGE_EXT.exec(u.pathname) || [])[1]?.toLowerCase();
+    const mediaType = !ext ? null : ext === "svg" ? "image/svg+xml" : ext === "jpg" || ext === "jpeg" ? "image/jpeg" : "image/" + ext;
+    return { uri: u.href, name, ...(mediaType ? { media_type: mediaType } : {}) };
+  }
+
   // ── One conversation ─────────────────────────────────────────────────
   // `pageUrl` is passed only when the conversation was opened from this
   // site's own chip. Opening the same agent from the roster deliberately
@@ -313,6 +364,27 @@
     };
     paint();
 
+    // What a drop left behind: an attached image, or a line saying why the
+    // drop could not become one. Both sit directly above the composer, where
+    // what you are about to send belongs.
+    let note = "";
+    const attach = el("div", "attach");
+    const paintAttach = () => {
+      attach.textContent = "";
+      const f = pendingFiles.get(id);
+      if (f) {
+        attach.appendChild(el("span", "file", f.name));
+        const rm = el("button", "rm", "✕");
+        rm.title = "Don't send this";
+        rm.onclick = () => { pendingFiles.delete(id); paintAttach(); };
+        attach.appendChild(rm);
+      } else if (note) {
+        attach.appendChild(el("span", "note", note));
+      }
+      attach.style.display = attach.childNodes.length ? "flex" : "none";
+    };
+    p.appendChild(attach);
+
     const composer = el("div", "composer");
     const input = document.createElement("input");
     input.placeholder = "Message " + (agent.handle || agent.name);
@@ -320,6 +392,44 @@
     composer.append(input, send);
     p.appendChild(composer);
     input.focus();
+    paintAttach();
+
+    p.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+      p.classList.add("over");
+    });
+    p.addEventListener("dragleave", (e) => { if (e.target === p) p.classList.remove("over"); });
+    p.addEventListener("drop", (e) => {
+      e.preventDefault();
+      p.classList.remove("over");
+      const dt = e.dataTransfer;
+      if (!dt) return;
+      note = "";
+      if (dt.files && dt.files.length) {
+        note = "Files from your computer are not sent yet. An image dragged from a page works.";
+        paintAttach();
+        return;
+      }
+      const img = draggedImage(dt);
+      if (img) {
+        const file = fileFromUrl(img);
+        if (file) pendingFiles.set(id, file);
+        else note = "That image is built into the page rather than hosted, so there is no address to pass on.";
+        paintAttach();
+        input.focus();
+        return;
+      }
+      let text = (dt.getData("text/plain") || "").trim();
+      if (!text) return;
+      if (text.length > MAX_DROPPED_TEXT) {
+        text = text.slice(0, MAX_DROPPED_TEXT);
+        note = `Kept the first ${MAX_DROPPED_TEXT} characters.`;
+      }
+      input.value = input.value ? input.value + " " + text : text;
+      paintAttach();
+      input.focus();
+    });
 
     const push = (role, text, err) => {
       const t = threads.get(id) || [];
@@ -330,13 +440,17 @@
 
     const submit = async () => {
       const text = input.value.trim();
-      if (!text || input.disabled) return;
+      const file = pendingFiles.get(id) || null;
+      if ((!text && !file) || input.disabled) return;
       input.value = "";
-      push("user", text);
+      pendingFiles.delete(id);
+      note = "";
+      paintAttach();
+      push("user", file ? (text ? text + "\n" : "") + "(attached " + file.name + ")" : text);
       input.disabled = true;
       send.disabled = true;
       input.placeholder = "Waiting for " + (agent.handle || agent.name) + "...";
-      const r = await ask({ op: "ask", agentId: id, message: text, pageUrl });
+      const r = await ask({ op: "ask", agentId: id, message: text, pageUrl, files: file ? [file] : undefined });
       input.disabled = false;
       send.disabled = false;
       input.placeholder = "Message " + (agent.handle || agent.name);

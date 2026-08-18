@@ -41,15 +41,44 @@ export async function roster(host) {
   return Array.isArray(r?.agents) ? r.agents : [];
 }
 
+/** Files a message carries, held to the same gate as EXT-11 page context and
+ *  for the same reason: a URL is sender-asserted, it is not fenced against
+ *  injection at the far end the way the message text is, and it is about to be
+ *  fetched by somebody else's agent. http(s) only, no whitespace or control
+ *  characters, bounded length, and at most one for now — anything else is
+ *  dropped whole rather than trimmed into something that looks deliberate. */
+function cleanFiles(files) {
+  if (!Array.isArray(files)) return [];
+  return files
+    .filter((f) => {
+      const uri = f?.uri;
+      if (typeof uri !== "string" || uri.length > 2048 || /[\s\u0000-\u001f\u007f]/.test(uri)) return false;
+      try {
+        const u = new URL(uri);
+        return u.protocol === "https:" || u.protocol === "http:";
+      } catch {
+        return false;
+      }
+    })
+    .slice(0, 1)
+    .map((f) => ({
+      uri: f.uri,
+      ...(typeof f.name === "string" && f.name ? { name: f.name.slice(0, 120) } : {}),
+      ...(typeof f.media_type === "string" && f.media_type ? { media_type: f.media_type.slice(0, 80) } : {}),
+    }));
+}
+
 /** One turn with an agent. `pageUrl` is EXT-11 page context and is sent ONLY
  *  for a conversation opened from that site's own chip: it is always a URL on
  *  the site's own host, so it tells the site nothing its server does not
  *  already know. Nothing else about the page travels -- not the title, not the
  *  text -- because only the message field is fenced against injection at the
  *  far end, and prose outside that fence is an injection channel. */
-export async function ask(agentId, message, pageUrl) {
+export async function ask(agentId, message, pageUrl, files) {
   const input = { message };
   if (pageUrl) input.page = { url: pageUrl };
+  const carried = cleanFiles(files);
+  if (carried.length) input.files = carried;
   const r = await gatewayPost("/api/extension/mesh/request", {
     agent_id: agentId,
     skill: "chat",
@@ -97,7 +126,7 @@ export async function handle(msg, sender) {
     const agent = host ? await siteDetect.cachedAgent(host, msg.agentId) : null;
     if (!agent?.endpoint) return { error: "this site's agent is no longer on the page" };
     try {
-      return { text: await a2a.visit(agent, msg.message) };
+      return { text: await a2a.visit(agent, msg.message, cleanFiles(msg.files)) };
     } catch (e) {
       return { error: e?.message || String(e) };
     }
@@ -110,7 +139,7 @@ export async function handle(msg, sender) {
       case "roster":
         return { agents: await roster(msg.host) };
       case "ask":
-        return { text: await ask(msg.agentId, msg.message, msg.pageUrl) };
+        return { text: await ask(msg.agentId, msg.message, msg.pageUrl, msg.files) };
       case "save":
         await save(msg.agent);
         return { ok: true };

@@ -52,6 +52,14 @@ out from the extension itself (`src/background/a2a.js`), anonymous and with no
 Gateway involved, because it carries no identity for the Gateway to lend it.
 Nothing is minted, nothing is saved, and nobody ends up vouching for anybody.
 
+You can drag into an open conversation. Text lands in the composer; an image
+from the page becomes an attachment on the next message, carried as its URL
+rather than its bytes, because that is what a page drag actually hands over.
+The panel can accept a drop precisely because it is drawn in the page: the
+toolbar popup cannot, since pressing the mouse down on the page blurs it and a
+popup that lost focus has already closed. Files dragged from the desktop say
+they are not sent yet rather than failing quietly.
+
 Everything that needs an identity — the roster and the conversations — still
 comes from the Gateway (`/api/extension/agents/roster`,
 `/api/extension/mesh/request`, `/api/extension/agents/saved`); the extension

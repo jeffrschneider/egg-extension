@@ -75,17 +75,39 @@ function textFromTask(task) {
   return textFromParts(artifactText) || textFromParts(task?.status?.message?.parts);
 }
 
+/** A2A carries an attachment as a FilePart naming a URI, which is exactly what
+ *  a dragged image gives us. The 1.0 shape is what our own bridge emits; the
+ *  older dialect discriminates its parts with `kind`. */
+function fileParts(files, v1) {
+  return (files ?? []).map((f) => {
+    const file = {
+      ...(f.name ? { name: f.name } : {}),
+      ...(f.media_type ? { mimeType: f.media_type } : {}),
+      uri: f.uri,
+    };
+    return v1 ? { file } : { kind: "file", file };
+  });
+}
+
 /** One turn with a site-declared A2A agent. Returns its text, or throws with
  *  something a person can read. */
-export async function visit(agent, text) {
+export async function visit(agent, text, files) {
   // The two dialects differ in more than the method name, and servers of the
   // older one validate strictly: agentcommunity.org rejects a message with no
   // `kind`. The 1.0 shape is the one our own bridge speaks and is left exactly
   // as the bridge sends it, discriminator included only where it is required.
   const v1 = agent.dialect !== "legacy";
+  const attached = fileParts(files, v1);
+  // A2A requires a non-empty parts array, so a message sent with an
+  // attachment and no words still carries a text part; it is just empty.
   const message = v1
-    ? { role: "ROLE_USER", parts: [{ text }], messageId: crypto.randomUUID() }
-    : { kind: "message", role: "user", messageId: crypto.randomUUID(), parts: [{ kind: "text", text }] };
+    ? { role: "ROLE_USER", parts: [{ text }, ...attached], messageId: crypto.randomUUID() }
+    : {
+        kind: "message",
+        role: "user",
+        messageId: crypto.randomUUID(),
+        parts: [{ kind: "text", text }, ...attached],
+      };
 
   const result = await rpc(
     agent.endpoint,
