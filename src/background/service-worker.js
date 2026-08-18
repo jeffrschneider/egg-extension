@@ -843,25 +843,28 @@ async function showAgents(tab) {
   }
 }
 
-/** Check whether this host declares an agent (EXT-11) and tell the tab to
- *  show or hide its chip. Detection runs HERE, in the extension: the site's
- *  own well-known file plus one registrar lookup, cached per host (a day for
- *  a verified answer, an hour for none) — see site-detect.js. No pairing
- *  gate: discovery needs no Gateway; only the conversation does. */
+/** Check which agents this host declares (EXT-11) and tell the tab to show or
+ *  hide its chip. Detection runs HERE, in the extension: the site's own
+ *  well-known file plus one registrar lookup per declared handle, cached per
+ *  host (a day for a verified answer, an hour for none) — see site-detect.js.
+ *  No pairing gate: discovery needs no Gateway; only the conversation does.
+ *  A site may declare several; the message carries them all in the site's
+ *  order, and `agent` stays as the primary for older panels. */
 async function refreshSiteAgent(tabId, url) {
   const host = agents.hostOf(url);
   if (!host) return;
-  const agent = await siteDetect.lookup(host);
-  if (!agent) {
-    try { await chrome.tabs.sendMessage(tabId, { type: "egg_site_agent", agent: null }); } catch {}
+  const list = await siteDetect.lookup(host);
+  const msg = { type: "egg_site_agent", agent: list[0] || null, agents: list };
+  if (!list.length) {
+    try { await chrome.tabs.sendMessage(tabId, msg); } catch {}
     return;
   }
   try {
-    await chrome.tabs.sendMessage(tabId, { type: "egg_site_agent", agent });
+    await chrome.tabs.sendMessage(tabId, msg);
   } catch {
     try {
       await chrome.scripting.executeScript({ target: { tabId }, files: ["src/content/agents-panel.js"] });
-      await chrome.tabs.sendMessage(tabId, { type: "egg_site_agent", agent });
+      await chrome.tabs.sendMessage(tabId, msg);
     } catch { /* restricted page */ }
   }
 }

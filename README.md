@@ -27,9 +27,15 @@ this folder. Then connect it to your Gateway from the popup.
 
 The site-agent chip (EXT-11) is detected by the extension itself: the site's
 own `/.well-known/agentmesh` file, the anchor-domain match, and one public
-registrar lookup (`src/background/site-detect.js`, a rule-for-rule port of
-the Gateway's `site_agents.rs`). Nothing in that chain needs pairing, so the
-chip works in a browser with no Gateway connected.
+registrar lookup per declared handle (`src/background/site-detect.js`, a
+rule-for-rule port of the Gateway's `site_agents.rs`). Nothing in that chain
+needs pairing, so the chip works in a browser with no Gateway connected.
+
+A site may declare several agents. Every entry is checked on its own — its own
+anchor match, its own resolution — and at most four are presented, so a
+verified first entry cannot carry an unverified one in behind it. There is
+still one chip: it opens the site's first agent, and the others sit in a strip
+inside the panel, each with its own thread.
 
 Everything that needs an identity — the roster and the conversations — still
 comes from the Gateway (`/api/extension/agents/roster`,

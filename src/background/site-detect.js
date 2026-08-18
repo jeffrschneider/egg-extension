@@ -8,6 +8,12 @@
 // but acme.com.evil.example may not), and the handle resolves to a card.
 // There is no unverified presentation tier.
 //
+// The declaration is a LIST, and every entry gets its own anchor check and its
+// own resolution — a site cannot smuggle an unverified agent in behind a
+// verified first one. The list is capped (MAX_AGENTS) so a 16 KB file cannot
+// turn one page load into an unbounded burst of registrar lookups. Order is
+// the site's: entry one is the primary, the one the chip opens.
+//
 // Detection deliberately does NOT involve the Gateway: the declaration file
 // is public, the extension is already on the site, and the registrar lookup
 // is one unauthenticated GET — so the chip works in a browser that has never
@@ -26,6 +32,10 @@ const FETCH_TIMEOUT_MS = 4000;
 const RESOLVE_TIMEOUT_MS = 6000;
 const MAX_FILE_BYTES = 16 * 1024;
 const MAX_PURPOSE_CHARS = 200;
+/** How many declared agents one site may present. The file has room for far
+ *  more than a person can choose between, and each admitted entry costs a
+ *  registrar lookup. */
+const MAX_AGENTS = 4;
 
 /** Lowercased host with any port stripped, or null for hosts that cannot
  *  carry a site agent at all: IP literals and single-label names have no
@@ -52,41 +62,20 @@ function fetchWithTimeout(url, ms) {
     .finally(() => clearTimeout(t));
 }
 
-/** One uncached discovery + verification pass for a normalized host.
- *  Returns { host, handle, purpose, agent_id } or null — errors on the way
- *  (no file, bad JSON, anchor mismatch, no resolution) all collapse to null,
- *  because to the chip they are all the same fact: nothing verified to show. */
-async function probe(host) {
-  // ── Discovery: the site's own declaration ──
-  let text;
-  try {
-    const resp = await fetchWithTimeout(`https://${host}/.well-known/agentmesh`, FETCH_TIMEOUT_MS);
-    if (!resp.ok) return null;
-    const len = Number(resp.headers.get("Content-Length") || 0);
-    if (len > MAX_FILE_BYTES) return null;
-    text = await resp.text();
-  } catch {
-    return null;
-  }
-  if (new TextEncoder().encode(text).length > MAX_FILE_BYTES) return null;
-  let doc;
-  try { doc = JSON.parse(text); } catch { return null; }
-  if (doc?.v !== 1) return null;
-  const first = Array.isArray(doc.agents) ? doc.agents[0] : null;
-  const handle = typeof first?.handle === "string" ? first.handle.trim() : "";
-  if (!handle) return null;
-
-  // ── Verification 1: the anchor match ──
+/** The anchor domain a handle claims, lowercased, or null when the handle
+ *  carries none. Everything after the LAST "@", so a local part containing
+ *  one cannot shift the anchor. */
+function anchorOf(handle) {
   const at = handle.lastIndexOf("@");
   if (at < 0) return null;
   const anchor = handle.slice(at + 1).trim().toLowerCase();
-  if (!anchor || !anchor.includes(".")) return null;
-  if (!anchorMatches(host, anchor)) {
-    console.log(`[Egg:SiteAgent] claim on ${host} REFUSED: ${handle} is anchored at ${anchor}, not here`);
-    return null;
-  }
+  return anchor && anchor.includes(".") ? anchor : null;
+}
 
-  // ── Verification 2: the handle resolves to a card at the registrar ──
+/** Verification 2 for one admitted entry: the handle resolves to a card at
+ *  the registrar, and the card names an agent key. Returns the chip's shape
+ *  or null. */
+async function resolveEntry(host, handle, purposeRaw) {
   let card;
   try {
     const resp = await fetchWithTimeout(
@@ -101,28 +90,79 @@ async function probe(host) {
   const agentId = card?.card?.endpoints?.[0]?.agent_id;
   if (typeof agentId !== "string" || !agentId) return null;
 
-  let purpose = typeof first.purpose === "string" ? [...first.purpose].slice(0, MAX_PURPOSE_CHARS).join("") : null;
+  let purpose = typeof purposeRaw === "string" ? [...purposeRaw].slice(0, MAX_PURPOSE_CHARS).join("") : null;
   if (purpose != null && !purpose.trim()) purpose = null;
 
   console.log(`[Egg:SiteAgent] verified for ${host}: ${handle} (${agentId})`);
   return { host, handle, purpose, agent_id: agentId };
 }
 
-/** The verified site agent for a host, if any. Cached in storage.session so
- *  browsing does not turn into a resolution stream; null is an answer, not a
- *  failure. */
+/** One uncached discovery + verification pass for a normalized host.
+ *  Returns the verified agents in the site's declared order, primary first —
+ *  an empty array when nothing verified, because errors on the way (no file,
+ *  bad JSON, anchor mismatch, no resolution) are all the same fact to the
+ *  chip: nothing to show. */
+async function probe(host) {
+  // ── Discovery: the site's own declaration ──
+  let text;
+  try {
+    const resp = await fetchWithTimeout(`https://${host}/.well-known/agentmesh`, FETCH_TIMEOUT_MS);
+    if (!resp.ok) return [];
+    const len = Number(resp.headers.get("Content-Length") || 0);
+    if (len > MAX_FILE_BYTES) return [];
+    text = await resp.text();
+  } catch {
+    return [];
+  }
+  if (new TextEncoder().encode(text).length > MAX_FILE_BYTES) return [];
+  let doc;
+  try { doc = JSON.parse(text); } catch { return []; }
+  if (doc?.v !== 1) return [];
+
+  // ── Verification 1: the anchor match, on every entry ──
+  // Local and cheap, so it runs first and thins the list before any lookup.
+  // A repeated handle is dropped rather than resolved twice.
+  const seen = new Set();
+  const admitted = [];
+  for (const entry of Array.isArray(doc.agents) ? doc.agents : []) {
+    if (admitted.length >= MAX_AGENTS) break;
+    const handle = typeof entry?.handle === "string" ? entry.handle.trim() : "";
+    if (!handle || seen.has(handle.toLowerCase())) continue;
+    seen.add(handle.toLowerCase());
+    const anchor = anchorOf(handle);
+    if (!anchor) continue;
+    if (!anchorMatches(host, anchor)) {
+      console.log(`[Egg:SiteAgent] claim on ${host} REFUSED: ${handle} is anchored at ${anchor}, not here`);
+      continue;
+    }
+    admitted.push({ handle, purpose: entry.purpose });
+  }
+  if (!admitted.length) return [];
+
+  // ── Verification 2: each admitted handle resolves to a card ──
+  // Concurrent, because they are independent lookups and the chip waits on
+  // the slowest either way; the declared order survives Promise.all.
+  const resolved = await Promise.all(
+    admitted.map((a) => resolveEntry(host, a.handle, a.purpose)),
+  );
+  return resolved.filter(Boolean);
+}
+
+/** The verified site agents for a host, in declared order. Cached in
+ *  storage.session so browsing does not turn into a resolution stream; an
+ *  empty array is an answer, not a failure. */
 export async function lookup(hostRaw) {
   const host = normalizeHost(hostRaw);
-  if (!host) return null;
+  if (!host) return [];
   const key = "siteAgent:" + host;
   try {
     const hit = (await chrome.storage.session.get(key))[key];
-    if (hit) {
-      const ttl = hit.agent ? POSITIVE_TTL_MS : NEGATIVE_TTL_MS;
-      if (Date.now() - hit.at < ttl) return hit.agent;
+    if (Array.isArray(hit?.agents)) {
+      const ttl = hit.agents.length ? POSITIVE_TTL_MS : NEGATIVE_TTL_MS;
+      if (Date.now() - hit.at < ttl) return hit.agents;
     }
   } catch { /* session storage unavailable — probe every time */ }
-  const agent = await probe(host);
-  try { await chrome.storage.session.set({ [key]: { at: Date.now(), agent } }); } catch { /* best effort */ }
-  return agent;
+  const agents = await probe(host);
+  try { await chrome.storage.session.set({ [key]: { at: Date.now(), agents } }); } catch { /* best effort */ }
+  return agents;
 }

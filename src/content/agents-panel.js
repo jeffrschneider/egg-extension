@@ -22,7 +22,7 @@
   let root = null;
   let chipEl = null;
   let panelEl = null;
-  let siteAgent = null; // the agent this host declares, when it does
+  let siteAgents = []; // the agents this host declares, in the site's own order
   const threads = new Map(); // agent_id -> [{ role, text }]
 
   function ask(msg) {
@@ -65,6 +65,14 @@
       .head .title { font-weight: 600; font-size: 13px; }
       .head .sub { font-size: 11px; color: #8a8a96; margin-top: 2px; }
       .head .trust { font-size: 10px; color: #34d399; margin-top: 3px; }
+      .switch { display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid #24242e; overflow-x: auto; }
+      .switch button {
+        flex: 0 0 auto; cursor: pointer; border-radius: 999px; padding: 4px 10px;
+        background: transparent; color: #8a8a96; border: 1px solid #2f2f3b;
+        font: 500 11px/1.4 system-ui, -apple-system, sans-serif;
+      }
+      .switch button:hover { color: #e6e6ef; }
+      .switch button.on { background: #262633; color: #e6e6ef; border-color: #3f3f4e; }
       .x { margin-left: auto; background: transparent; border: 0; color: #8a8a96; cursor: pointer; font-size: 15px; line-height: 1; padding: 2px 4px; }
       .x:hover { color: #e6e6ef; }
       .body { flex: 1; min-height: 0; overflow-y: auto; }
@@ -217,6 +225,25 @@
     return row;
   }
 
+  // The label a site agent goes by in the switcher: the handle's own name,
+  // the part before its anchor mailbox ("Concierge.hello@acme.com" is
+  // "Concierge"). Never anything the page supplied.
+  function handleLabel(handle) {
+    return String(handle || "").split(".")[0] || handle;
+  }
+
+  // A declared site agent in the shape a conversation wants.
+  function asChatAgent(a) {
+    return {
+      agent_id: a.agent_id,
+      handle: a.handle,
+      name: a.handle,
+      description: a.purpose,
+      verified: "site",
+      source: "site:" + a.host,
+    };
+  }
+
   // ── One conversation ─────────────────────────────────────────────────
   // `pageUrl` is passed only when the conversation was opened from this
   // site's own chip. Opening the same agent from the roster deliberately
@@ -241,6 +268,23 @@
     x.onclick = closePanel;
     head.appendChild(x);
     p.appendChild(head);
+
+    // ── The other agents this site declares ──
+    // The site named an order, so the chip lands you on its first agent and
+    // the rest sit here, one click away, rather than making you choose from a
+    // menu before you have said anything. Each keeps its own thread, because
+    // threads are keyed by agent. Only shown for a conversation with one of
+    // THIS site's declared agents, and only when there is somewhere to switch.
+    if (siteAgents.length > 1 && siteAgents.some((a) => a.agent_id === id)) {
+      const strip = el("div", "switch");
+      for (const a of siteAgents) {
+        const b = el("button", a.agent_id === id ? "on" : null, handleLabel(a.handle));
+        if (a.purpose) b.title = a.purpose;
+        b.onclick = () => { if (a.agent_id !== id) showChat(asChatAgent(a), pageUrl); };
+        strip.appendChild(b);
+      }
+      p.appendChild(strip);
+    }
 
     const body = el("div", "body");
     const msgs = el("div", "msgs");
@@ -295,31 +339,26 @@
   }
 
   // ── The chip: a doorbell, nothing more ───────────────────────────────
-  function showChip(agent) {
+  // One chip per site however many agents it declares: the site has one front
+  // door, and its first agent is who answers it.
+  function showChip(list) {
     ensureRoot();
-    siteAgent = agent;
+    siteAgents = list;
+    const primary = list[0];
     if (chipEl) chipEl.remove();
     chipEl = el("div", "chip");
     chipEl.appendChild(el("span", "dot"));
-    chipEl.appendChild(el("span", null, "Agent"));
-    chipEl.title = "This site has an agent on AgentMesh. Click to talk.";
-    chipEl.onclick = () =>
-      showChat(
-        {
-          agent_id: agent.agent_id,
-          handle: agent.handle,
-          name: agent.handle,
-          description: agent.purpose,
-          verified: "site",
-          source: "site:" + agent.host,
-        },
-        location.href,
-      );
+    chipEl.appendChild(el("span", null, list.length > 1 ? "Agents" : "Agent"));
+    chipEl.title =
+      list.length > 1
+        ? `This site has ${list.length} agents on AgentMesh. Click to talk to ${handleLabel(primary.handle)}.`
+        : "This site has an agent on AgentMesh. Click to talk.";
+    chipEl.onclick = () => showChat(asChatAgent(primary), location.href);
     root.appendChild(chipEl);
   }
 
   function hideChip() {
-    siteAgent = null;
+    siteAgents = [];
     if (chipEl) { chipEl.remove(); chipEl = null; }
   }
 
@@ -328,7 +367,9 @@
       try { showRoster(); } catch { /* tolerated */ }
       sendResponse({ ok: true });
     } else if (msg?.type === "egg_site_agent") {
-      try { msg.agent ? showChip(msg.agent) : hideChip(); } catch { /* tolerated */ }
+      // `agents` is the list; `agent` is the primary an older worker sends.
+      const list = Array.isArray(msg.agents) ? msg.agents : msg.agent ? [msg.agent] : [];
+      try { list.length ? showChip(list) : hideChip(); } catch { /* tolerated */ }
       sendResponse({ ok: true });
     }
     return false;
