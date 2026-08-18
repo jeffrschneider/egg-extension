@@ -61,6 +61,7 @@
         "src/content/readability.js",
         "src/content/feed-detect.js",
         "src/content/signals.js",
+        "src/content/agents-panel.js",
         "src/content/content-script.js"
       ],
       "run_at": "document_idle"

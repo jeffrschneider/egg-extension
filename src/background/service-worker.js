@@ -7,6 +7,7 @@ import * as feeds from "./feeds.js";
 import * as signals from "./signals.js";
 import * as notifications from "./notifications.js";
 import * as commands from "./commands.js";
+import * as agents from "./agents.js";
 import { dispatch, resizeDataUrl, extractArticle } from "./dispatch.js";
 import { speak, transcribe } from "./speech.js";
 
@@ -808,9 +809,66 @@ async function openEggMenu(tab, opts = {}) {
     items.push({ action: "video_transcript", label: "Get video transcript", hint: "" });
   }
   items.push({ action: "screenshot", label: "Screenshot & crop", hint: "" });
+  items.push({ action: "agents", label: "Agents", hint: "" });
   const apps = EGG_APPS.map((a) => ({ id: a.id, label: a.label, icon: APP_ICONS[a.icon] || "" }));
   await showEggMenu(tab, items, "Egg", apps);
 }
+
+// ── Agents ───────────────────────────────────────────────────────────
+// The roster lives in the page, not in browser chrome: an extension gets one
+// action icon, and in Egg (WebView2) its badge and context menus are not
+// reliable, so a surface that only exists there would be invisible in half the
+// browsers this runs in.
+
+/** Open the roster panel on `tab`, injecting the panel if the content script
+ *  is not present (heavy pages settle late), the same way the Egg menu does. */
+async function showAgents(tab) {
+  if (!tab) return { ok: false, reason: "no_tab" };
+  try {
+    await chrome.tabs.sendMessage(tab.id, { type: "egg_show_agents" });
+    return { ok: true };
+  } catch {
+    /* not injected yet */
+  }
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ["src/content/agents-panel.js"],
+    });
+    await chrome.tabs.sendMessage(tab.id, { type: "egg_show_agents" });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: e?.message || "unavailable_here" };
+  }
+}
+
+/** Ask the Gateway whether this host declares an agent (EXT-11) and tell the
+ *  tab to show or hide its chip. The Gateway caches per host -- a day for a
+ *  verified answer, an hour for none -- so this is cheap on every navigation,
+ *  and an unpaired browser asks nothing at all. */
+async function refreshSiteAgent(tabId, url) {
+  const host = agents.hostOf(url);
+  if (!host) return;
+  if (!(await isPaired())) return;
+  const agent = await agents.siteAgent(host);
+  if (!agent) {
+    try { await chrome.tabs.sendMessage(tabId, { type: "egg_site_agent", agent: null }); } catch {}
+    return;
+  }
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: "egg_site_agent", agent });
+  } catch {
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ["src/content/agents-panel.js"] });
+      await chrome.tabs.sendMessage(tabId, { type: "egg_site_agent", agent });
+    } catch { /* restricted page */ }
+  }
+}
+
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  if (info.status !== "complete") return;
+  refreshSiteAgent(tabId, tab?.url);
+});
 
 // Show the menu on `tab` robustly. Prefer messaging the content script (fast,
 // no per-host scripting-permission dependency). If it isn't present yet (heavy
@@ -1046,7 +1104,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           else if (msg.action === "img_ponder") sendResponse(await sendImage(msg.payload, "ponder", tab));
           else if (msg.action === "img_studio") sendResponse(await sendImage(msg.payload, "studio", tab));
           else if (msg.action === "img_memorize") sendResponse(await sendImage(msg.payload, "memorize", tab));
+          else if (msg.action === "agents") sendResponse(await showAgents(tab));
           else sendResponse({ ok: false, reason: "unknown_action" });
+          return;
+        }
+        case "egg_agents": {
+          // The injected roster/conversation panel. It holds no Gateway
+          // credential of its own -- every call lands here.
+          sendResponse(await agents.handle(msg));
           return;
         }
         case "video_action": {
