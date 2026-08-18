@@ -8,6 +8,7 @@ import * as signals from "./signals.js";
 import * as notifications from "./notifications.js";
 import * as commands from "./commands.js";
 import * as agents from "./agents.js";
+import * as siteDetect from "./site-detect.js";
 import { dispatch, resizeDataUrl, extractArticle } from "./dispatch.js";
 import { speak, transcribe } from "./speech.js";
 
@@ -842,15 +843,15 @@ async function showAgents(tab) {
   }
 }
 
-/** Ask the Gateway whether this host declares an agent (EXT-11) and tell the
- *  tab to show or hide its chip. The Gateway caches per host -- a day for a
- *  verified answer, an hour for none -- so this is cheap on every navigation,
- *  and an unpaired browser asks nothing at all. */
+/** Check whether this host declares an agent (EXT-11) and tell the tab to
+ *  show or hide its chip. Detection runs HERE, in the extension: the site's
+ *  own well-known file plus one registrar lookup, cached per host (a day for
+ *  a verified answer, an hour for none) — see site-detect.js. No pairing
+ *  gate: discovery needs no Gateway; only the conversation does. */
 async function refreshSiteAgent(tabId, url) {
   const host = agents.hostOf(url);
   if (!host) return;
-  if (!(await isPaired())) return;
-  const agent = await agents.siteAgent(host);
+  const agent = await siteDetect.lookup(host);
   if (!agent) {
     try { await chrome.tabs.sendMessage(tabId, { type: "egg_site_agent", agent: null }); } catch {}
     return;

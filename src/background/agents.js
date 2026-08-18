@@ -1,11 +1,12 @@
-// Agents — the roster and the conversation, served entirely by the Gateway.
+// Agents — the roster and the conversation, served by the Gateway.
 //
-// There is one kind of counterpart, a mesh agent, and the Gateway already
-// knows all of them: the ones it runs itself, the runtimes attached to it,
-// agents kept from elsewhere, paired devices, contacts' agents, and the agent
-// a site declares about itself. This module is the thin client for that: no
-// list, no key and no verification logic lives in the extension, so the same
-// answers appear here, in another browser, or in any other client that asks.
+// There is one kind of counterpart, a mesh agent, and the Gateway knows the
+// ones that need an operator behind them: the ones it runs itself, the
+// runtimes attached to it, agents kept from elsewhere, paired devices, and
+// contacts' agents. This module is the thin client for that. The one thing
+// detected here in the extension instead is the agent a SITE declares about
+// itself (EXT-11, see site-detect.js) — that is public discovery plus a
+// public registrar lookup, so it deliberately works with no Gateway paired.
 //
 // Content scripts never hold the Gateway token; they message the service
 // worker, which owns the pairing (see gateway.js).
@@ -29,20 +30,8 @@ export async function roster(host) {
   // Contacts' agents cost one registry lookup each; the panel is a deliberate
   // list, so it pays for them.
   qs.set("contacts", "1");
-  const r = await gatewayGet(`/api/agents/roster?${qs}`);
+  const r = await gatewayGet(`/api/extension/agents/roster?${qs}`);
   return Array.isArray(r?.agents) ? r.agents : [];
-}
-
-/** The verified agent a host declares (EXT-11), or null. Cached by the
- *  Gateway per host, so asking on every navigation is cheap. */
-export async function siteAgent(host) {
-  if (!host) return null;
-  try {
-    const r = await gatewayGet(`/api/mesh/site-agent?host=${encodeURIComponent(host)}`);
-    return r?.agent ?? null;
-  } catch {
-    return null;
-  }
 }
 
 /** One turn with an agent. `pageUrl` is EXT-11 page context and is sent ONLY
@@ -54,7 +43,7 @@ export async function siteAgent(host) {
 export async function ask(agentId, message, pageUrl) {
   const input = { message };
   if (pageUrl) input.page = { url: pageUrl };
-  const r = await gatewayPost("/api/mesh/request", {
+  const r = await gatewayPost("/api/extension/mesh/request", {
     agent_id: agentId,
     skill: "chat",
     input,
@@ -73,7 +62,7 @@ export async function ask(agentId, message, pageUrl) {
 
 /** Keep an agent met elsewhere, with how it was verified at that moment. */
 export async function save(agent) {
-  await gatewayPost("/api/agents/saved", {
+  await gatewayPost("/api/extension/agents/saved", {
     agent_id: agent.agent_id,
     name: agent.handle || agent.name,
     handle: agent.handle ?? null,
@@ -84,7 +73,7 @@ export async function save(agent) {
 
 /** Forget a saved agent. */
 export async function forget(agentId) {
-  await gatewayFetch(`/api/agents/saved/${encodeURIComponent(agentId)}`, { method: "DELETE" });
+  await gatewayFetch(`/api/extension/agents/saved/${encodeURIComponent(agentId)}`, { method: "DELETE" });
 }
 
 /** Handle one "egg_agents" message from a content script. Returns the reply

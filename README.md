@@ -25,9 +25,15 @@ this folder. Then connect it to your Gateway from the popup.
 
 ## Agents
 
-The extension holds no agent list, no key and no verification logic. It asks
-the Gateway (`/api/agents/roster`, `/api/mesh/site-agent`, `/api/mesh/request`,
-`/api/agents/saved`) and renders the answer, so every client sees the same
-truth. The panel is drawn in a closed shadow root: an extension gets no room
-in the toolbar, and a claim about identity must not be something the page can
-read, restyle, or forge.
+The site-agent chip (EXT-11) is detected by the extension itself: the site's
+own `/.well-known/agentmesh` file, the anchor-domain match, and one public
+registrar lookup (`src/background/site-detect.js`, a rule-for-rule port of
+the Gateway's `site_agents.rs`). Nothing in that chain needs pairing, so the
+chip works in a browser with no Gateway connected.
+
+Everything that needs an identity — the roster and the conversations — still
+comes from the Gateway (`/api/extension/agents/roster`,
+`/api/extension/mesh/request`, `/api/extension/agents/saved`); the extension
+holds no keys. The panel is drawn in a closed shadow root: an extension gets
+no room in the toolbar, and a claim about identity must not be something the
+page can read, restyle, or forge.
