@@ -1,0 +1,8 @@
+{
+  "name": "egg-extension",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/gates.test.mjs"
+  }
+}

@@ -54,6 +54,7 @@
       }
       .chip:hover { background: #1d1d26; }
       .chip .dot { width: 7px; height: 7px; border-radius: 50%; background: #34d399; }
+      .chip .dot.unver { background: transparent; border: 1px solid #9a9aa6; }
       .panel {
         position: fixed; top: 0; right: 0; height: 100vh; width: 380px; max-width: 100vw;
         display: flex; flex-direction: column;
@@ -65,6 +66,7 @@
       .head .title { font-weight: 600; font-size: 13px; }
       .head .sub { font-size: 11px; color: #8a8a96; margin-top: 2px; }
       .head .trust { font-size: 10px; color: #34d399; margin-top: 3px; }
+      .head .trust.unver { color: #fbbf24; }
       .switch { display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid #24242e; overflow-x: auto; }
       .switch button {
         flex: 0 0 auto; cursor: pointer; border-radius: 999px; padding: 4px 10px;
@@ -111,6 +113,11 @@
     switch (a.verified) {
       case "hosted": return "Runs on your machine";
       case "site": return site ? `Verified agent for ${site}` : "Verified site agent";
+      // The A2A tier. Nothing here was checked by anyone: the site published a
+      // card, and that is the whole of it. Say so in the words a person would
+      // use, and never borrow the word "verified".
+      case "site-declared":
+        return site ? `${site} says this is its agent. Not checked` : "The site's own word. Not checked";
       case "handle": return "Public handle checked";
       case "paired": return "Paired device";
       case "owner": return a.owner ? `${a.owner}'s agent` : "Same owner key";
@@ -225,11 +232,15 @@
     return row;
   }
 
-  // The label a site agent goes by in the switcher: the handle's own name,
-  // the part before its anchor mailbox ("Concierge.hello@acme.com" is
-  // "Concierge"). Never anything the page supplied.
-  function handleLabel(handle) {
-    return String(handle || "").split(".")[0] || handle;
+  // The label a site agent goes by in the switcher. For our own declaration
+  // that is the handle's name, the part before its anchor mailbox
+  // ("Concierge.hello@acme.com" is "Concierge"). An A2A card has no handle,
+  // only a name it chose for itself, so that gets used as-is and cut to a
+  // length that fits a pill.
+  function agentLabel(a) {
+    const raw = String(a.handle || "");
+    if (a.tier === "site-declared") return raw.length > 18 ? raw.slice(0, 17) + "…" : raw;
+    return raw.split(".")[0] || raw;
   }
 
   // A declared site agent in the shape a conversation wants.
@@ -239,7 +250,7 @@
       handle: a.handle,
       name: a.handle,
       description: a.purpose,
-      verified: "site",
+      verified: a.tier === "site-declared" ? "site-declared" : "site",
       source: "site:" + a.host,
     };
   }
@@ -257,7 +268,9 @@
     if (agent.description || agent.purpose) {
       box.appendChild(el("div", "sub", agent.description || agent.purpose));
     }
-    box.appendChild(el("div", "trust", trustLine(agent)));
+    box.appendChild(
+      el("div", agent.verified === "site-declared" ? "trust unver" : "trust", trustLine(agent)),
+    );
     head.appendChild(box);
 
     const back = el("button", "x", "‹");
@@ -278,7 +291,7 @@
     if (siteAgents.length > 1 && siteAgents.some((a) => a.agent_id === id)) {
       const strip = el("div", "switch");
       for (const a of siteAgents) {
-        const b = el("button", a.agent_id === id ? "on" : null, handleLabel(a.handle));
+        const b = el("button", a.agent_id === id ? "on" : null, agentLabel(a));
         if (a.purpose) b.title = a.purpose;
         b.onclick = () => { if (a.agent_id !== id) showChat(asChatAgent(a), pageUrl); };
         strip.appendChild(b);
@@ -345,14 +358,21 @@
     ensureRoot();
     siteAgents = list;
     const primary = list[0];
+    // The dot is the only thing on the chip that carries a claim: filled when
+    // an identity was checked, hollow when the site is merely saying so. The
+    // word stays "Agent" either way, because the chip's job is to say someone
+    // is here, and what is known about them belongs in the panel.
+    const verified = list.some((a) => a.tier !== "site-declared");
     if (chipEl) chipEl.remove();
     chipEl = el("div", "chip");
-    chipEl.appendChild(el("span", "dot"));
+    chipEl.appendChild(el("span", verified ? "dot" : "dot unver"));
     chipEl.appendChild(el("span", null, list.length > 1 ? "Agents" : "Agent"));
     chipEl.title =
       list.length > 1
-        ? `This site has ${list.length} agents on AgentMesh. Click to talk to ${handleLabel(primary.handle)}.`
-        : "This site has an agent on AgentMesh. Click to talk.";
+        ? `This site names ${list.length} agents. Click to talk to ${agentLabel(primary)}.`
+        : verified
+          ? "This site has an agent on AgentMesh, and the claim checks out. Click to talk."
+          : "This site says it has an agent. Nothing about that is checked. Click to talk.";
     chipEl.onclick = () => showChat(asChatAgent(primary), location.href);
     root.appendChild(chipEl);
   }

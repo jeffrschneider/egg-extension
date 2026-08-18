@@ -37,6 +37,21 @@ verified first entry cannot carry an unverified one in behind it. There is
 still one chip: it opens the site's first agent, and the others sit in a strip
 inside the panel, each with its own thread.
 
+A site may also, or instead, publish a Google A2A agent card, which is the
+convention actually in the wild. Both files are fetched every time and
+everything found is surfaced. The tiers are not equal and the panel says so:
+ours is anchored here and resolved at the registrar to a key, while a card is
+the site's own word and nothing more. The chip's dot is filled for a checked
+identity and hollow for a declared one. A card is only presented when it names
+a JSON-RPC endpoint on the same site over https that accepts anonymous callers
+(`tests/gates.test.mjs` covers those rules), which stops a page from serving
+somebody else's card to borrow their credibility.
+
+Talking to a card is an ephemeral visit, not a relationship: the request goes
+out from the extension itself (`src/background/a2a.js`), anonymous and with no
+Gateway involved, because it carries no identity for the Gateway to lend it.
+Nothing is minted, nothing is saved, and nobody ends up vouching for anybody.
+
 Everything that needs an identity — the roster and the conversations — still
 comes from the Gateway (`/api/extension/agents/roster`,
 `/api/extension/mesh/request`, `/api/extension/agents/saved`); the extension

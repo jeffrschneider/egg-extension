@@ -1115,7 +1115,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         case "egg_agents": {
           // The injected roster/conversation panel. It holds no Gateway
           // credential of its own -- every call lands here.
-          sendResponse(await agents.handle(msg));
+          sendResponse(await agents.handle(msg, _sender));
           return;
         }
         case "video_action": {

@@ -8,9 +8,16 @@
 // itself (EXT-11, see site-detect.js) — that is public discovery plus a
 // public registrar lookup, so it deliberately works with no Gateway paired.
 //
+// One conversation also happens outside the Gateway: a visit to a site's own
+// A2A agent (a2a.js). It is anonymous by nature, so there is no identity for
+// the Gateway to lend it and nothing for it to record. Everything that has an
+// identity behind it still goes through the Gateway.
+//
 // Content scripts never hold the Gateway token; they message the service
 // worker, which owns the pairing (see gateway.js).
 import { gatewayGet, gatewayPost, gatewayFetch, isPaired } from "./gateway.js";
+import * as siteDetect from "./site-detect.js";
+import * as a2a from "./a2a.js";
 
 /** Host of a tab URL, or null for anything that cannot declare an agent. */
 export function hostOf(url) {
@@ -79,7 +86,22 @@ export async function forget(agentId) {
 /** Handle one "egg_agents" message from a content script. Returns the reply
  *  object; every failure comes back as { error } rather than throwing, so the
  *  panel can say what went wrong instead of hanging. */
-export async function handle(msg) {
+export async function handle(msg, sender) {
+  // A visit to a site's own A2A agent goes out from here, not through the
+  // Gateway: it carries no identity, so it needs none. That also means it must
+  // not sit behind the pairing gate, and that the endpoint is looked up from
+  // what detection admitted for the tab's own host rather than taken from the
+  // message.
+  if (msg.op === "ask" && String(msg.agentId || "").startsWith("a2a:")) {
+    const host = hostOf(sender?.tab?.url);
+    const agent = host ? await siteDetect.cachedAgent(host, msg.agentId) : null;
+    if (!agent?.endpoint) return { error: "this site's agent is no longer on the page" };
+    try {
+      return { text: await a2a.visit(agent, msg.message) };
+    } catch (e) {
+      return { error: e?.message || String(e) };
+    }
+  }
   if (!(await isPaired())) {
     return { error: "This browser is not connected to your Egg Gateway yet." };
   }
