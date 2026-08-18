@@ -23,6 +23,10 @@
   let chipEl = null;
   let panelEl = null;
   let siteAgents = []; // the agents this host declares, in the site's own order
+  // When the user last pressed a pointer down somewhere that is NOT our UI.
+  // Leaving on purpose must never be undone; only focus that the PAGE took is
+  // worth taking back.
+  let lastPagePointer = 0;
   const threads = new Map(); // agent_id -> [{ role, text }]
 
   function ask(msg) {
@@ -108,6 +112,32 @@
       .empty { padding: 16px 14px; font-size: 11px; color: #8a8a96; }
     `;
     root.appendChild(style);
+    // What you type here is not the page's business. Keyboard events are
+    // composed, so without this they cross the shadow boundary and land in
+    // whatever the site has bound to the document -- and sites bind a lot to
+    // single keys. Stopping them at our own host keeps them from every
+    // BUBBLE-phase handler on the page.
+    //
+    // It does not stop a page that listens in the CAPTURE phase, which is
+    // what GitHub does: capture runs from the window downward and reaches the
+    // document before the event has got anywhere near this element, and
+    // stopping it that early would stop it reaching our own input as well.
+    // Nothing inside a shared document can fix that one; not sharing the
+    // document is what fixes it.
+    for (const type of ["keydown", "keypress", "keyup", "input", "paste", "cut", "copy"]) {
+      hostEl.addEventListener(type, (e) => e.stopPropagation());
+    }
+    // Watch for the user choosing to go back to the page. Clicking away is a
+    // decision and must stand; only focus the page TOOK gets taken back.
+    document.addEventListener(
+      "pointerdown",
+      (e) => {
+        let ours = false;
+        try { ours = e.composedPath().includes(hostEl); } catch { ours = false; }
+        if (!ours) lastPagePointer = Date.now();
+      },
+      true,
+    );
     document.documentElement.appendChild(hostEl);
     return root;
   }
@@ -438,26 +468,60 @@
       paint();
     };
 
+    // The composer stays ENABLED while an answer is outstanding. It used to
+    // disable itself, and a disabled input cannot hold focus: the moment you
+    // pressed Enter, focus fell to the page's body and everything typed during
+    // the wait went to the page, which on a site with keyboard shortcuts is
+    // worse than lost. Waiting is a flag now, so you keep the cursor and can
+    // type the next message while the last one is still out.
+    let busy = false;
     const submit = async () => {
       const text = input.value.trim();
       const file = pendingFiles.get(id) || null;
-      if ((!text && !file) || input.disabled) return;
+      if ((!text && !file) || busy) return;
       input.value = "";
       pendingFiles.delete(id);
       note = "";
       paintAttach();
       push("user", file ? (text ? text + "\n" : "") + "(attached " + file.name + ")" : text);
-      input.disabled = true;
+      busy = true;
       send.disabled = true;
       input.placeholder = "Waiting for " + (agent.handle || agent.name) + "...";
       const r = await ask({ op: "ask", agentId: id, message: text, pageUrl, files: file ? [file] : undefined });
-      input.disabled = false;
+      busy = false;
       send.disabled = false;
       input.placeholder = "Message " + (agent.handle || agent.name);
       if (r.error) push("agent", "No answer: " + r.error, true);
       else push("agent", r.text);
       input.focus();
     };
+    // ── Taking the cursor back ──
+    // A page can move focus out of here without the user asking: a keyboard
+    // shortcut bound in the capture phase (which we cannot stop from inside a
+    // shared document), or a live feed that re-renders and focuses something
+    // of its own. Either way the sentence in progress starts landing on the
+    // page. So: if focus leaves the composer while the user is mid-sentence,
+    // and they did not click away themselves, take it back.
+    //
+    // Bounded on purpose. A page that insists is a page we would otherwise
+    // fight in a loop, so after a few tries in a row we stop and let the user
+    // click back rather than spin.
+    let lastTyped = 0;
+    let restores = 0;
+    let restoreWindowAt = 0;
+    input.addEventListener("keydown", () => { lastTyped = Date.now(); });
+    input.addEventListener("focusout", (e) => {
+      if (panelEl !== p) return; // this conversation is no longer on screen
+      const to = e.relatedTarget;
+      if (to && root.contains(to)) return; // moved within our own UI
+      const now = Date.now();
+      if (now - lastTyped > 10000) return; // not mid-sentence
+      if (now - lastPagePointer < 400) return; // the user clicked away
+      if (now - restoreWindowAt > 2000) { restoreWindowAt = now; restores = 0; }
+      if (++restores > 5) return;
+      setTimeout(() => { if (panelEl === p) input.focus(); }, 0);
+    });
+
     send.onclick = submit;
     input.onkeydown = (e) => {
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
